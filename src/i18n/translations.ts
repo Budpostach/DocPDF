@@ -128,8 +128,8 @@ export const translations: Record<Language, TranslationDict> = {
         hint: 'Ручне налаштування',
       },
     },
-    uploadTitle: 'Оберіть PDF-файли або перетягніть сюди',
-    uploadSubtitle: 'Контракти, інвойси, пакувальні листи, ВМД, банківські виписки',
+    uploadTitle: 'Оберіть PDF, DOC, DOCX або перетягніть сюди',
+    uploadSubtitle: 'Контракти, інвойси, специфікації, ВМД, банківські виписки',
     uploadButton: 'Обрати файли',
     localBadge: 'Обробка локально в оперативній пам’яті браузера. Документи нікуди не передаються.',
     settingsTitle: 'Параметри конвертації',
@@ -168,8 +168,8 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Готові',
     emptyTitle: 'Черга порожня',
     emptyBody:
-      'Додайте один або кілька PDF-файлів зліва. Для митниці рекомендуємо профіль «Митниця · ≤ 490 КБ», а для валютного контролю банків — єдиний файл або сторінки до 1.9 МБ.',
-    emptyCta: 'Обрати PDF-файли',
+      'Додайте один або кілька файлів PDF, DOC чи DOCX зліва. Документи Word автоматично перетворюються у PDF з обраним лімітом розміру та колірним режимом.',
+    emptyCta: 'Обрати файли',
     statusWait: 'У черзі',
     statusWorking: 'Обробка',
     statusDone: 'Готово',
@@ -224,7 +224,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: '100% клієнтська обробка',
-        desc: 'Рендеринг сторінок через Web Worker (PDF.js) та складання нового PDF (jsPDF) відбувається виключно у браузері на вашому пристрої.',
+        desc: 'Рендеринг PDF (PDF.js), розбір Word DOC/DOCX та складання підсумкового PDF (jsPDF) відбувається виключно у браузері на вашому пристрої.',
       },
       {
         title: 'Без сторонніх серверів',
@@ -265,8 +265,8 @@ export const translations: Record<Language, TranslationDict> = {
         hint: 'Manual configuration',
       },
     },
-    uploadTitle: 'Select PDF files or drag and drop here',
-    uploadSubtitle: 'Contracts, commercial invoices, packing lists, customs declarations, bank statements',
+    uploadTitle: 'Select PDF, DOC, DOCX or drop here',
+    uploadSubtitle: 'Contracts, commercial invoices, packing lists, customs declarations',
     uploadButton: 'Select Files',
     localBadge: 'Processed locally in browser memory. Documents are never uploaded to any server.',
     settingsTitle: 'Conversion Settings',
@@ -305,8 +305,8 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Complete',
     emptyTitle: 'Queue is empty',
     emptyBody:
-      'Add one or more PDF files on the left. For strict customs portals choose "Customs · ≤ 490 KB"; for banking FX compliance use split or merged modes up to 4.5 MB.',
-    emptyCta: 'Choose PDF Files',
+      'Add one or more PDF, DOC, or DOCX files on the left. Word documents are converted directly to compliant PDFs with your chosen size cap and color profile.',
+    emptyCta: 'Choose Files',
     statusWait: 'Queued',
     statusWorking: 'Processing',
     statusDone: 'Complete',
@@ -361,7 +361,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: '100% Client-Side Execution',
-        desc: 'Page rasterization via PDF.js Web Worker and PDF assembly via jsPDF run strictly inside your browser memory.',
+        desc: 'PDF rendering (PDF.js), Word DOC/DOCX parsing, and PDF assembly (jsPDF) run strictly inside your browser memory.',
       },
       {
         title: 'Zero Server Uploads',

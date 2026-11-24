@@ -9,6 +9,7 @@ import { translations } from './i18n/translations';
 import {
   convertPdfDocument,
   downloadAllOutputsAsZip,
+  isSupportedDocumentFile,
   revokeItemOutputs,
 } from './services/pdfConverter';
 import { ConversionSettings, Language, PresetId, QueueFilter, QueueItem } from './types/pdf';
@@ -73,12 +74,10 @@ export default function App() {
 
   const handleAddFiles = (files: File[]) => {
     if (busy) return;
-    const validPdfs = files.filter(
-      (file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name),
-    );
-    if (validPdfs.length === 0) return;
+    const validFiles = files.filter(isSupportedDocumentFile);
+    if (validFiles.length === 0) return;
 
-    const newItems: QueueItem[] = validPdfs.map((file) => ({
+    const newItems: QueueItem[] = validFiles.map((file) => ({
       id: `${file.name}_${file.size}_${crypto.randomUUID().slice(0, 8)}`,
       file,
       status: 'wait',

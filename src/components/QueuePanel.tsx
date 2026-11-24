@@ -12,7 +12,12 @@ import {
 } from 'lucide-react';
 import { useRef } from 'react';
 import { TranslationDict } from '../i18n/translations';
-import { formatBytes, saveBlobAsFile } from '../services/pdfConverter';
+import {
+  ACCEPTED_DOCUMENT_TYPES,
+  formatBytes,
+  getDocumentFormatLabel,
+  saveBlobAsFile,
+} from '../services/pdfConverter';
 import { PageOutput, QueueFilter, QueueItem } from '../types/pdf';
 
 interface QueuePanelProps {
@@ -148,7 +153,7 @@ export function QueuePanel({
           <input
             ref={emptyInputRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept={ACCEPTED_DOCUMENT_TYPES}
             multiple
             onChange={(e) => {
               if (e.target.files) {
@@ -180,6 +185,10 @@ export function QueuePanel({
                       {item.file.name}
                     </p>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 tabular-nums">
+                      <span className="font-mono font-medium text-slate-700">
+                        {getDocumentFormatLabel(item.file.name)}
+                      </span>
+                      <span aria-hidden="true">·</span>
                       <span className="font-mono">{formatBytes(item.file.size)}</span>
                       {item.pages > 0 && (
                         <>

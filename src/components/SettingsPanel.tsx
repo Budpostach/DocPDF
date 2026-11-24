@@ -1,6 +1,7 @@
 import { ShieldCheck, Upload } from 'lucide-react';
 import React, { useRef, useState } from 'react';
 import { TranslationDict } from '../i18n/translations';
+import { ACCEPTED_DOCUMENT_TYPES } from '../services/pdfConverter';
 import { ColorMode, ConversionSettings, OutputMode, SizeLimitKb } from '../types/pdf';
 
 interface SettingsPanelProps {
@@ -58,7 +59,7 @@ export function SettingsPanel({
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept={ACCEPTED_DOCUMENT_TYPES}
           multiple
           disabled={busy}
           onChange={(e) => {
