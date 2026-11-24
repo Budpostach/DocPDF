@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Footer } from './components/Footer';
 import { Header } from './components/Header';
 import { PreviewModal } from './components/PreviewModal';
@@ -283,6 +284,7 @@ export default function App() {
           t={t}
         />
       )}
+      <Analytics />
     </div>
   );
 }
