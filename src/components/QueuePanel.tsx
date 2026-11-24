@@ -63,8 +63,8 @@ export function QueuePanel({
   };
 
   return (
-    <section className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 flex flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200">
+    <section className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-5 flex flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
           <h2 className="font-bold text-lg text-slate-950">{t.queueTitle}</h2>
           {queue.length > 0 && (
@@ -139,7 +139,7 @@ export function QueuePanel({
       </div>
 
       {queue.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center py-16 px-4">
+        <div className="flex-1 flex flex-col items-center justify-center text-center py-10 px-4">
           <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500 mb-4">
             <FileText className="w-6 h-6" aria-hidden="true" />
           </div>

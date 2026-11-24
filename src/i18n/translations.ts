@@ -135,8 +135,8 @@ export const translations: Record<Language, TranslationDict> = {
     settingsTitle: 'Параметри конвертації',
     outputModeLabel: 'Формат виводу',
     outputModes: {
-      split: 'Посторінково (окремі PDF)',
-      merged: 'Єдиний стиснутий PDF',
+      split: 'Посторінково',
+      merged: 'Єдиний PDF',
     },
     sizeLimitLabel: 'Ліміт розміру файлу',
     sizeLimits: {
@@ -160,7 +160,7 @@ export const translations: Record<Language, TranslationDict> = {
     specPrivacyVal: '0 байт на сервер',
     convertBtn: 'Конвертувати документи',
     convertingBtn: 'Триває обробка...',
-    clearBtn: 'Очистити чергу',
+    clearBtn: 'Очистити',
     queueTitle: 'Черга документів та результати',
     downloadAllBtn: 'Завантажити все (ZIP)',
     filterAll: 'Усі',
@@ -272,8 +272,8 @@ export const translations: Record<Language, TranslationDict> = {
     settingsTitle: 'Conversion Settings',
     outputModeLabel: 'Output Mode',
     outputModes: {
-      split: 'Split by page (individual PDFs)',
-      merged: 'Single optimized PDF',
+      split: 'Split by page',
+      merged: 'Single PDF',
     },
     sizeLimitLabel: 'Target File Size Limit',
     sizeLimits: {
@@ -297,7 +297,7 @@ export const translations: Record<Language, TranslationDict> = {
     specPrivacyVal: '0 bytes uploaded',
     convertBtn: 'Convert Documents',
     convertingBtn: 'Processing...',
-    clearBtn: 'Clear Queue',
+    clearBtn: 'Clear',
     queueTitle: 'Document Queue & Outputs',
     downloadAllBtn: 'Download All (ZIP)',
     filterAll: 'All',

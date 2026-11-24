@@ -13,7 +13,7 @@ export function Header({ lang, onLangChange, t }: HeaderProps) {
 
   return (
     <header className="bg-white border-b border-slate-200">
-      <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-16 flex items-center justify-between gap-8">
+      <div className="max-w-[1280px] mx-auto px-5 sm:px-8 h-14 flex items-center justify-between gap-8">
         <a
           href="#converter"
           className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-slate-950 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 rounded-md"

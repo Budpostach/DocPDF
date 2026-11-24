@@ -41,7 +41,7 @@ export function SettingsPanel({
   };
 
   return (
-    <aside className="lg:col-span-4 space-y-5">
+    <aside className="lg:col-span-4 space-y-3.5">
       <label
         onDragOver={(e) => {
           e.preventDefault();
@@ -49,7 +49,7 @@ export function SettingsPanel({
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        className={`block bg-white border-2 border-dashed rounded-xl p-6 sm:p-7 text-center transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 ${
+        className={`flex items-center gap-3.5 bg-white border-2 border-dashed rounded-xl p-3.5 text-left transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 ${
           isDragging
             ? 'border-blue-600 bg-blue-50/70'
             : 'border-slate-300 hover:border-slate-400'
@@ -67,26 +67,30 @@ export function SettingsPanel({
           }}
           className="sr-only"
         />
-        <div className="mx-auto w-11 h-11 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700 mb-3">
-          <Upload className="w-5 h-5" aria-hidden="true" />
+        <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700 shrink-0">
+          <Upload className="w-4 h-4" aria-hidden="true" />
         </div>
-        <p className="font-semibold text-sm text-slate-900">{t.uploadTitle}</p>
-        <p className="mt-1.5 text-xs text-slate-500 leading-relaxed">{t.uploadSubtitle}</p>
-        <div className="mt-4">
-          <span className="inline-flex items-center justify-center px-4 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap">
-            {t.uploadButton}
-          </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-xs sm:text-sm text-slate-900 leading-snug">
+            {t.uploadTitle}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500 truncate" title={t.uploadSubtitle}>
+            {t.uploadSubtitle}
+          </p>
         </div>
+        <span className="inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0">
+          {t.uploadButton}
+        </span>
       </label>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-        <h2 className="font-bold text-base text-slate-950">{t.settingsTitle}</h2>
+      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3.5">
+        <h2 className="font-bold text-sm text-slate-950">{t.settingsTitle}</h2>
 
         <div>
-          <span className="block text-xs font-semibold text-slate-600 mb-2">
+          <span className="block text-xs font-semibold text-slate-600 mb-1.5">
             {t.outputModeLabel}
           </span>
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-lg">
+          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg">
             {(['split', 'merged'] as OutputMode[]).map((mode) => {
               const active = settings.outputMode === mode;
               return (
@@ -95,7 +99,7 @@ export function SettingsPanel({
                   type="button"
                   disabled={busy}
                   onClick={() => onUpdateSettings({ outputMode: mode, preset: 'custom' })}
-                  className={`px-3 py-2 text-xs font-medium rounded-md transition-colors cursor-pointer disabled:opacity-55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
+                  className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer disabled:opacity-55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
                     active
                       ? 'bg-white text-slate-950 shadow-xs'
                       : 'text-slate-600 hover:text-slate-950'
@@ -111,7 +115,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="size-limit-select"
-            className="block text-xs font-semibold text-slate-600 mb-1.5"
+            className="block text-xs font-semibold text-slate-600 mb-1"
           >
             {t.sizeLimitLabel}
           </label>
@@ -125,7 +129,7 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-10 bg-slate-50 border border-slate-300 rounded-lg px-3 text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
+            className="w-full h-9 bg-slate-50 border border-slate-300 rounded-lg px-2.5 text-xs sm:text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
           >
             <option value={490}>{t.sizeLimits[490]}</option>
             <option value={950}>{t.sizeLimits[950]}</option>
@@ -137,7 +141,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="color-mode-select"
-            className="block text-xs font-semibold text-slate-600 mb-1.5"
+            className="block text-xs font-semibold text-slate-600 mb-1"
           >
             {t.colorModeLabel}
           </label>
@@ -151,7 +155,7 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-10 bg-slate-50 border border-slate-300 rounded-lg px-3 text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
+            className="w-full h-9 bg-slate-50 border border-slate-300 rounded-lg px-2.5 text-xs sm:text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
           >
             <option value="grayscale">{t.colorModes.grayscale}</option>
             <option value="bw_contrast">{t.colorModes.bw_contrast}</option>
@@ -159,16 +163,10 @@ export function SettingsPanel({
           </select>
         </div>
 
-        <dl className="pt-4 border-t border-slate-200 space-y-2.5 text-xs">
+        <dl className="pt-2.5 border-t border-slate-200 space-y-1.5 text-xs">
           <div className="flex items-center justify-between gap-2">
             <dt className="text-slate-500">{t.specResolution}</dt>
             <dd className="font-medium text-slate-900 tabular-nums">{t.specResolutionVal}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <dt className="text-slate-500">{t.specOutput}</dt>
-            <dd className="font-medium text-slate-900">
-              {settings.outputMode === 'split' ? t.specOutputSplit : t.specOutputMerged}
-            </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-slate-500">{t.specPrivacy}</dt>
@@ -176,12 +174,12 @@ export function SettingsPanel({
           </div>
         </dl>
 
-        <div className="pt-2 space-y-2.5">
+        <div className="pt-1 flex items-center gap-2">
           <button
             type="button"
             disabled={!canConvert || busy}
             onClick={onConvert}
-            className="w-full min-h-11 px-4 py-2.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+            className="flex-1 min-h-10 px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
           >
             {busy ? t.convertingBtn : t.convertBtn}
           </button>
@@ -190,15 +188,15 @@ export function SettingsPanel({
             type="button"
             disabled={!hasItems || busy}
             onClick={onClear}
-            className="w-full min-h-10 px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+            className="min-h-10 px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
           >
             {t.clearBtn}
           </button>
         </div>
       </div>
 
-      <div className="flex items-start gap-2.5 px-1 text-xs text-slate-500 leading-relaxed">
-        <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="flex items-start gap-2 px-1 text-[11px] text-slate-500 leading-snug">
+        <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
         <p>{t.localBadge}</p>
       </div>
     </aside>
