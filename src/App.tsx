@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Footer } from './components/Footer';
 import { Header } from './components/Header';
 import { PreviewModal } from './components/PreviewModal';
 import { QueuePanel } from './components/QueuePanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StandardsSection } from './components/StandardsSection';
-import { WorkspaceToolbar } from './components/WorkspaceToolbar';
 import { translations } from './i18n/translations';
 import {
   convertPdfDocument,
@@ -193,30 +193,11 @@ export default function App() {
     : undefined;
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="min-h-screen flex flex-col bg-[#121316] text-[#eef0f4]">
       <Header lang={lang} onLangChange={setLang} t={t} />
 
       <main id="converter" className="flex-1">
-        <WorkspaceToolbar
-          activePreset={settings.preset}
-          onSelectPreset={handleSelectPreset}
-          disabled={busy}
-          t={t}
-        />
-
-        <div className="max-w-[1280px] mx-auto px-5 sm:px-8 pb-10 grid lg:grid-cols-12 gap-6 items-start">
-          <SettingsPanel
-            settings={settings}
-            onUpdateSettings={handleUpdateSettings}
-            onAddFiles={handleAddFiles}
-            onConvert={handleConvertPending}
-            onClear={handleClearQueue}
-            busy={busy}
-            canConvert={canConvert}
-            hasItems={queue.length > 0}
-            t={t}
-          />
-
+        <div className="max-w-[1360px] mx-auto px-5 sm:px-8 pt-5 pb-10 grid lg:grid-cols-12 gap-6 items-start">
           <QueuePanel
             queue={queue}
             filter={filter}
@@ -231,17 +212,24 @@ export default function App() {
             busy={busy}
             t={t}
           />
+
+          <SettingsPanel
+            settings={settings}
+            onSelectPreset={handleSelectPreset}
+            onUpdateSettings={handleUpdateSettings}
+            onConvert={handleConvertPending}
+            onClear={handleClearQueue}
+            busy={busy}
+            canConvert={canConvert}
+            hasItems={queue.length > 0}
+            t={t}
+          />
         </div>
 
         <StandardsSection t={t} />
       </main>
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="max-w-[1280px] mx-auto px-5 sm:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
-          <span>{t.footerCopy}</span>
-          <span>{t.footerNote}</span>
-        </div>
-      </footer>
+      <Footer t={t} />
 
       {previewItem && previewTarget && (
         <PreviewModal

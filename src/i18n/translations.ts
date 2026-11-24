@@ -5,8 +5,9 @@ export interface TranslationDict {
   navConverter: string;
   navStandards: string;
   navPrivacy: string;
-  heroTitle: string;
-  heroSubtitle: string;
+  workspaceTrailRoot: string;
+  workspaceTrailActive: string;
+  localBanner: string;
   presetsLabel: string;
   presets: Record<
     PresetId,
@@ -15,9 +16,12 @@ export interface TranslationDict {
       hint: string;
     }
   >;
-  uploadTitle: string;
-  uploadSubtitle: string;
-  uploadButton: string;
+  addFilesBtn: string;
+  searchPlaceholder: string;
+  clearSearchLabel: string;
+  viewListLabel: string;
+  viewGridLabel: string;
+  dropOverlayTitle: string;
   localBadge: string;
   settingsTitle: string;
   outputModeLabel: string;
@@ -38,17 +42,9 @@ export interface TranslationDict {
     bw_contrast: string;
     color: string;
   };
-  specResolution: string;
-  specResolutionVal: string;
-  specOutput: string;
-  specOutputSplit: string;
-  specOutputMerged: string;
-  specPrivacy: string;
-  specPrivacyVal: string;
   convertBtn: string;
   convertingBtn: string;
   clearBtn: string;
-  queueTitle: string;
   downloadAllBtn: string;
   filterAll: string;
   filterPending: string;
@@ -56,6 +52,7 @@ export interface TranslationDict {
   emptyTitle: string;
   emptyBody: string;
   emptyCta: string;
+  noSearchResults: string;
   statusWait: string;
   statusWorking: string;
   statusDone: string;
@@ -75,6 +72,7 @@ export interface TranslationDict {
   closeBtn: string;
   prevPageBtn: string;
   nextPageBtn: string;
+  outputsCount: (n: number) => string;
   statsFiles: (n: number) => string;
   statsPages: (n: number) => string;
   standardsTitle: string;
@@ -103,150 +101,145 @@ export interface TranslationDict {
 export const translations: Record<Language, TranslationDict> = {
   ua: {
     brandName: 'DocGate PDF',
-    navConverter: 'Конвертер',
-    navStandards: 'Вимоги банків і митниці',
-    navPrivacy: 'Безпека даних',
-    heroTitle: 'Підготовка PDF-документів для банків та митниці',
-    heroSubtitle:
-      'Посторінковий поділ, автоматичний підбір DPI під суворі ліміти розміру та підсилення контрасту для печаток — локально у вашому браузері.',
-    presetsLabel: 'Швидкі профілі:',
+    navConverter: 'Файли',
+    navStandards: 'Вимоги',
+    navPrivacy: 'Безпека',
+    workspaceTrailRoot: 'Конвертер',
+    workspaceTrailActive: 'PDF · Word · Excel',
+    localBanner: 'Обробка відбувається локально у браузері — файли не завантажуються на сервер',
+    presetsLabel: 'Швидкий профіль',
     presets: {
       customs_strict: {
         label: 'Митниця · ≤ 490 КБ',
-        hint: 'Окремі сторінки, Grayscale',
+        hint: 'Посторінково, Grayscale',
       },
       bank_split: {
         label: 'Банк (сторінки) · ≤ 1.9 МБ',
-        hint: 'Окремі сторінки, Колір',
+        hint: 'Посторінково, Колір',
       },
       bank_single: {
-        label: 'Банк (єдиний PDF) · ≤ 4.5 МБ',
-        hint: 'Єдиний файл, Контрастний',
+        label: 'Банк (єдиний) · ≤ 4.5 МБ',
+        hint: 'Єдиний PDF, Контрастний скан',
       },
       custom: {
-        label: 'Власні параметри',
-        hint: 'Ручне налаштування',
+        label: 'Власні',
+        hint: 'Ручні налаштування',
       },
     },
-    uploadTitle: 'Оберіть PDF, Word або Excel',
-    uploadSubtitle: 'PDF, DOC, DOCX, XLS, XLSX, CSV — інвойси, специфікації, ВМД',
-    uploadButton: 'Обрати файли',
-    localBadge: 'Обробка локально в оперативній пам’яті браузера. Документи нікуди не передаються.',
-    settingsTitle: 'Параметри конвертації',
+    addFilesBtn: 'Додати',
+    searchPlaceholder: 'Пошук',
+    clearSearchLabel: 'Очистити пошук',
+    viewListLabel: 'Список',
+    viewGridLabel: 'Плитка',
+    dropOverlayTitle: 'Відпустіть файли для додавання в чергу',
+    localBadge: '0 байт передано на сервер. Усе працює локально у вашому браузері.',
+    settingsTitle: 'Параметри',
     outputModeLabel: 'Формат виводу',
     outputModes: {
       split: 'Посторінково',
       merged: 'Єдиний PDF',
     },
-    sizeLimitLabel: 'Ліміт розміру файлу',
+    sizeLimitLabel: 'Ліміт розміру',
     sizeLimits: {
-      490: 'До 490 КБ (Суворий · Єдине вікно митниці)',
-      950: 'До 950 КБ (Стандарт · Електронні кабінети)',
-      1900: 'До 1.9 МБ (Розширений · Банківські портали)',
-      4500: 'До 4.5 МБ (Пакет документів · Валютний контроль)',
+      490: 'До 490 КБ (Митниця)',
+      950: 'До 950 КБ (Е-кабінети)',
+      1900: 'До 1.9 МБ (Банки)',
+      4500: 'До 4.5 МБ (Пакет документів)',
     },
-    colorModeLabel: 'Колірна схема',
+    colorModeLabel: 'Колір',
     colorModes: {
       grayscale: 'Чорно-білий (Grayscale)',
-      bw_contrast: 'Контрастний скан (чіткі печатки)',
-      color: 'Кольоровий (зберегти колір)',
+      bw_contrast: 'Контрастний скан',
+      color: 'Кольоровий',
     },
-    specResolution: 'Роздільна здатність',
-    specResolutionVal: 'Автопідбір 300 → 50 DPI',
-    specOutput: 'Режим',
-    specOutputSplit: '1 сторінка = 1 PDF',
-    specOutputMerged: 'Весь документ = 1 PDF',
-    specPrivacy: 'Передача даних',
-    specPrivacyVal: '0 байт на сервер',
-    convertBtn: 'Конвертувати документи',
-    convertingBtn: 'Триває обробка...',
-    clearBtn: 'Очистити',
-    queueTitle: 'Черга документів та результати',
-    downloadAllBtn: 'Завантажити все (ZIP)',
-    filterAll: 'Усі',
+    convertBtn: 'Конвертувати',
+    convertingBtn: 'Обробка...',
+    clearBtn: 'Очистити все',
+    downloadAllBtn: 'Завантажити ZIP',
+    filterAll: 'Усі файли',
     filterPending: 'У черзі',
     filterDone: 'Готові',
-    emptyTitle: 'Черга порожня',
-    emptyBody:
-      'Додайте файли PDF, DOC/DOCX або XLS/XLSX/CSV зліва. Таблиці Excel конвертуються за схемою Excel → PDF → JPEG → PDF зі збереженням структури, меж та пропорцій.',
-    emptyCta: 'Обрати файли',
+    emptyTitle: 'Додайте документи для конвертації',
+    emptyBody: 'Перетягніть сюди файли PDF, DOC, DOCX, XLS, XLSX або CSV — або натисніть «Додати».',
+    emptyCta: 'Додати файли',
+    noSearchResults: 'За вашим запитом файлів не знайдено.',
     statusWait: 'У черзі',
     statusWorking: 'Обробка',
     statusDone: 'Готово',
     statusError: 'Помилка',
     pagesLabel: 'Сторінок',
     pageShort: 'Стор.',
-    mergedLabel: 'Весь файл',
-    allPagesLabel: 'сторінок',
-    pageProgress: (current, total) => `стор. ${current} з ${total}`,
+    mergedLabel: 'Єдиний файл',
+    allPagesLabel: 'стор.',
+    pageProgress: (current, total) => `${current} з ${total}`,
     withinLimitLabel: 'У межах ліміту',
-    overLimitLabel: 'Перевищує ліміт (мін. DPI)',
-    savedLabel: 'Стиснення',
+    overLimitLabel: 'Понад ліміт',
+    savedLabel: 'економії',
     previewBtn: 'Перегляд',
     downloadBtn: 'Завантажити',
     removeBtn: 'Видалити',
-    reconvertBtn: 'Переконвертувати',
+    reconvertBtn: 'Повторити',
     closeBtn: 'Закрити',
     prevPageBtn: 'Попередня',
     nextPageBtn: 'Наступна',
+    outputsCount: (n) => `${n} PDF`,
     statsFiles: (n) => `${n} файл(ів)`,
     statsPages: (n) => `${n} стор.`,
-    standardsTitle: 'Типові вимоги банків і митних систем',
-    standardsSubtitle:
-      'Орієнтовні технічні обмеження для подання сканованих та електронних PDF-документів.',
+    standardsTitle: 'Вимоги банків і митних систем',
+    standardsSubtitle: 'Орієнтовні обмеження для подання PDF-документів.',
     standardsCols: {
       portal: 'Система / Призначення',
-      limit: 'Ліміт розміру',
+      limit: 'Ліміт',
       mode: 'Рекомендований режим',
-      notes: 'Примітки для подання',
+      notes: 'Примітки',
     },
     standardsRows: [
       {
-        portal: 'ДМСУ · Єдине вікно / Митне оформлення',
-        limit: '≤ 490 КБ / файл',
+        portal: 'ДМСУ · Єдине вікно / Митниця',
+        limit: '≤ 490 КБ',
         mode: 'Посторінково · Grayscale',
-        notes: 'Суворе обмеження на одне вкладення; автоматичний підбір DPI зберігає читабельність номерів ВМД та інвойсів.',
+        notes: 'Автоматичний підбір DPI (300 → 50) зберігає читабельність номерів ВМД та інвойсів.',
       },
       {
-        portal: 'Банківський валютний контроль (ЗЕД)',
-        limit: '≤ 1.9 МБ – 4.5 МБ',
-        mode: 'Єдиний PDF або сторінки · Контраст / Колір',
-        notes: 'Контракти, специфікації, акти та СМР з чіткими печатками та підписами сторін.',
+        portal: 'Банківський валютний контроль',
+        limit: '≤ 1.9 – 4.5 МБ',
+        mode: 'Єдиний PDF або сторінки · Контраст',
+        notes: 'Контракти, інвойси, специфікації та СМР із чіткими печатками й підписами.',
       },
       {
-        portal: 'Електронний документообіг (Вчасно / M.E.Doc / Клієнт-Банк)',
+        portal: 'Вчасно / M.E.Doc / Клієнт-Банк',
         limit: '≤ 950 КБ – 1.9 МБ',
         mode: 'Єдиний PDF · Контрастний скан',
-        notes: 'Зменшує вагу багатосторінкових сканів у 3–8 разів без втрати розбірливості тексту.',
+        notes: 'Зменшує вагу багатосторінкових документів у 3–8 разів без втрати якості тексту.',
       },
     ],
-    privacyTitle: 'Архітектура конфіденційності',
+    privacyTitle: 'Безпека даних',
     privacyPoints: [
       {
-        title: '100% клієнтська обробка',
-        desc: 'Рендеринг PDF (PDF.js), розбір Word (DOC/DOCX) і Excel (XLS/XLSX/CSV) та складання підсумкового PDF відбуваються виключно у браузері.',
+        title: 'Локальна обробка',
+        desc: 'Рендеринг PDF (PDF.js), Word (DOC/DOCX) і Excel (Excel → PDF → JPEG → PDF) виконується виключно у браузері.',
       },
       {
-        title: 'Без сторонніх серверів',
-        desc: 'Жоден контракт, інвойс, банківська виписка чи митна декларація не покидає вашу локальну сесію.',
+        title: 'Без завантаження на сервер',
+        desc: 'Жоден інвойс, контракт чи митна декларація не покидає ваш пристрій.',
       },
       {
-        title: 'Локальні таблиці шрифтів',
-        desc: 'Таблиці кодувань (CMap) та стандартні шрифти PDF завантажуються локально з цього домену — коректна робота з кирилицею та спецсимволами.',
+        title: 'Автономні ресурси',
+        desc: 'Таблиці кодувань CMap і стандартні шрифти підключаються локально з цього домену.',
       },
     ],
-    footerCopy: 'DocGate PDF · Конвертер для банківських та митних документів',
-    footerNote: 'Локальна обробка в браузері (UA / EN)',
+    footerCopy: 'DocGate PDF',
+    footerNote: 'Локальний конвертер документів (UA / EN)',
   },
   en: {
     brandName: 'DocGate PDF',
-    navConverter: 'Converter',
-    navStandards: 'Bank & Customs Limits',
-    navPrivacy: 'Data Privacy',
-    heroTitle: 'PDF Preparation for Banks & Customs',
-    heroSubtitle:
-      'Page-by-page splitting, automatic DPI scaling to meet strict file-size caps, and scan contrast enhancement — processed entirely in your browser.',
-    presetsLabel: 'Quick Presets:',
+    navConverter: 'Files',
+    navStandards: 'Limits',
+    navPrivacy: 'Privacy',
+    workspaceTrailRoot: 'Converter',
+    workspaceTrailActive: 'PDF · Word · Excel',
+    localBanner: '100% browser-local processing — your files never leave this device',
+    presetsLabel: 'Quick Preset',
     presets: {
       customs_strict: {
         label: 'Customs · ≤ 490 KB',
@@ -257,122 +250,117 @@ export const translations: Record<Language, TranslationDict> = {
         hint: 'Split pages, Color',
       },
       bank_single: {
-        label: 'Bank (Single PDF) · ≤ 4.5 MB',
-        hint: 'Merged PDF, High Contrast',
+        label: 'Bank (Single) · ≤ 4.5 MB',
+        hint: 'Single PDF, High Contrast',
       },
       custom: {
-        label: 'Custom Settings',
-        hint: 'Manual configuration',
+        label: 'Custom',
+        hint: 'Manual settings',
       },
     },
-    uploadTitle: 'Select PDF, Word, or Excel files',
-    uploadSubtitle: 'PDF, DOC, DOCX, XLS, XLSX, CSV — invoices, packing lists, specs',
-    uploadButton: 'Select Files',
-    localBadge: 'Processed locally in browser memory. Documents are never uploaded to any server.',
-    settingsTitle: 'Conversion Settings',
+    addFilesBtn: 'Add Files',
+    searchPlaceholder: 'Search',
+    clearSearchLabel: 'Clear search',
+    viewListLabel: 'List view',
+    viewGridLabel: 'Grid view',
+    dropOverlayTitle: 'Drop files to add to the queue',
+    localBadge: '0 bytes uploaded. Everything runs locally in your browser.',
+    settingsTitle: 'Settings',
     outputModeLabel: 'Output Mode',
     outputModes: {
-      split: 'Split by page',
+      split: 'Split pages',
       merged: 'Single PDF',
     },
-    sizeLimitLabel: 'Target File Size Limit',
+    sizeLimitLabel: 'Size Limit',
     sizeLimits: {
-      490: 'Up to 490 KB (Strict · Customs Single Window)',
-      950: 'Up to 950 KB (Standard · E-Portals)',
-      1900: 'Up to 1.9 MB (Extended · Bank Portals)',
-      4500: 'Up to 4.5 MB (Full Contract Package · FX Control)',
+      490: 'Up to 490 KB (Customs)',
+      950: 'Up to 950 KB (E-Portals)',
+      1900: 'Up to 1.9 MB (Banks)',
+      4500: 'Up to 4.5 MB (Full Package)',
     },
     colorModeLabel: 'Color Mode',
     colorModes: {
-      grayscale: 'Grayscale (Black & White)',
-      bw_contrast: 'High-Contrast Scan (Crisp Stamps)',
-      color: 'Full Color (Preserve Color)',
+      grayscale: 'Grayscale (B&W)',
+      bw_contrast: 'High-Contrast Scan',
+      color: 'Full Color',
     },
-    specResolution: 'Resolution',
-    specResolutionVal: 'Auto-fit 300 → 50 DPI',
-    specOutput: 'Mode',
-    specOutputSplit: '1 page = 1 PDF',
-    specOutputMerged: 'Full document = 1 PDF',
-    specPrivacy: 'Network Upload',
-    specPrivacyVal: '0 bytes uploaded',
-    convertBtn: 'Convert Documents',
+    convertBtn: 'Convert',
     convertingBtn: 'Processing...',
-    clearBtn: 'Clear',
-    queueTitle: 'Document Queue & Outputs',
-    downloadAllBtn: 'Download All (ZIP)',
-    filterAll: 'All',
+    clearBtn: 'Clear all',
+    downloadAllBtn: 'Download ZIP',
+    filterAll: 'All files',
     filterPending: 'Queued',
-    filterDone: 'Complete',
-    emptyTitle: 'Queue is empty',
-    emptyBody:
-      'Add PDF, DOC/DOCX, or XLS/XLSX/CSV files on the left. Excel files follow the Excel → PDF → JPEG → PDF pipeline preserving column widths, merges, and borders.',
-    emptyCta: 'Choose Files',
+    filterDone: 'Ready',
+    emptyTitle: 'Add documents to convert',
+    emptyBody: 'Drag & drop PDF, DOC, DOCX, XLS, XLSX, or CSV files here — or click Add Files.',
+    emptyCta: 'Add Files',
+    noSearchResults: 'No files match your search.',
     statusWait: 'Queued',
     statusWorking: 'Processing',
-    statusDone: 'Complete',
+    statusDone: 'Ready',
     statusError: 'Error',
     pagesLabel: 'Pages',
     pageShort: 'Page',
-    mergedLabel: 'Full PDF',
+    mergedLabel: 'Single PDF',
     allPagesLabel: 'pages',
-    pageProgress: (current, total) => `page ${current} of ${total}`,
+    pageProgress: (current, total) => `${current} of ${total}`,
     withinLimitLabel: 'Within limit',
-    overLimitLabel: 'Above limit (min DPI)',
-    savedLabel: 'Reduction',
+    overLimitLabel: 'Over limit',
+    savedLabel: 'saved',
     previewBtn: 'Preview',
     downloadBtn: 'Download',
     removeBtn: 'Remove',
-    reconvertBtn: 'Re-convert',
+    reconvertBtn: 'Re-run',
     closeBtn: 'Close',
     prevPageBtn: 'Previous',
     nextPageBtn: 'Next',
+    outputsCount: (n) => `${n} PDF`,
     statsFiles: (n) => `${n} file(s)`,
     statsPages: (n) => `${n} page(s)`,
-    standardsTitle: 'Common Bank & Customs PDF Requirements',
-    standardsSubtitle:
-      'Reference thresholds for submitting scanned contracts, invoices, and declarations.',
+    standardsTitle: 'Bank & Customs PDF Requirements',
+    standardsSubtitle: 'Reference file limits for compliance document submissions.',
     standardsCols: {
       portal: 'Portal / Use Case',
-      limit: 'Size Limit',
-      mode: 'Recommended Profile',
-      notes: 'Compliance Notes',
+      limit: 'Limit',
+      mode: 'Recommended Mode',
+      notes: 'Notes',
     },
     standardsRows: [
       {
         portal: 'Customs Single Window (e-Customs)',
-        limit: '≤ 490 KB / file',
+        limit: '≤ 490 KB',
         mode: 'Split Pages · Grayscale',
-        notes: 'Strict per-attachment ceiling; automatic DPI selection keeps declaration numbers and HS codes legible.',
+        notes: 'Adaptive 300 → 50 DPI keeps declaration numbers and HS codes sharp.',
       },
       {
-        portal: 'Bank FX & Trade Compliance',
-        limit: '≤ 1.9 MB – 4.5 MB',
-        mode: 'Single PDF or Split · Contrast / Color',
-        notes: 'Cross-border contracts, invoices, CMRs, and acts with clear stamps and signatures.',
+        portal: 'Bank FX & Trade Control',
+        limit: '≤ 1.9 – 4.5 MB',
+        mode: 'Single PDF or Split · Contrast',
+        notes: 'Contracts, invoices, packing lists, and CMRs with clear stamps and signatures.',
       },
       {
-        portal: 'Corporate Client-Bank & E-Doc Portals',
+        portal: 'Corporate Client-Bank & E-Doc',
         limit: '≤ 950 KB – 1.9 MB',
         mode: 'Single PDF · High-Contrast Scan',
-        notes: 'Reduces multi-page scan weight by 3–8x while preserving crisp document text.',
+        notes: 'Reduces multi-page scan file sizes by 3–8x while maintaining crisp text.',
       },
     ],
-    privacyTitle: 'Privacy-First Local Architecture',
+    privacyTitle: 'Data Privacy',
     privacyPoints: [
       {
-        title: '100% Client-Side Execution',
-        desc: 'PDF rendering (PDF.js), Word (DOC/DOCX) and Excel (XLS/XLSX/CSV) parsing, and PDF assembly run strictly inside your browser memory.',
+        title: 'Local Browser Execution',
+        desc: 'PDF rendering (PDF.js), Word (DOC/DOCX), and Excel (Excel → PDF → JPEG → PDF) run strictly inside browser memory.',
       },
       {
         title: 'Zero Server Uploads',
-        desc: 'Sensitive contracts, invoices, bank statements, and customs declarations never leave your device.',
+        desc: 'No invoice, contract, or customs declaration ever leaves your device.',
       },
       {
-        title: 'Self-Hosted Font & CMap Assets',
-        desc: 'CMap encoding tables and standard PDF fonts are bundled locally for reliable Cyrillic and multilingual rendering.',
+        title: 'Self-Hosted Assets',
+        desc: 'CMap tables and standard PDF fonts load locally from this origin.',
       },
     ],
-    footerCopy: 'DocGate PDF · Bank & Customs Document Converter',
-    footerNote: 'Local Browser Processing (UA / EN)',
+    footerCopy: 'DocGate PDF',
+    footerNote: 'Local Document Converter (UA / EN)',
   },
 };

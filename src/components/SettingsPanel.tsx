@@ -1,13 +1,11 @@
-import { ShieldCheck, Upload } from 'lucide-react';
-import React, { useRef, useState } from 'react';
+import { ShieldCheck, Trash2 } from 'lucide-react';
 import { TranslationDict } from '../i18n/translations';
-import { ACCEPTED_DOCUMENT_TYPES } from '../services/pdfConverter';
-import { ColorMode, ConversionSettings, OutputMode, SizeLimitKb } from '../types/pdf';
+import { ColorMode, ConversionSettings, OutputMode, PresetId, SizeLimitKb } from '../types/pdf';
 
 interface SettingsPanelProps {
   settings: ConversionSettings;
+  onSelectPreset: (preset: PresetId) => void;
   onUpdateSettings: (patch: Partial<ConversionSettings>) => void;
-  onAddFiles: (files: File[]) => void;
   onConvert: () => void;
   onClear: () => void;
   busy: boolean;
@@ -16,10 +14,12 @@ interface SettingsPanelProps {
   t: TranslationDict;
 }
 
+const PRESET_ORDER: PresetId[] = ['customs_strict', 'bank_split', 'bank_single', 'custom'];
+
 export function SettingsPanel({
   settings,
+  onSelectPreset,
   onUpdateSettings,
-  onAddFiles,
   onConvert,
   onClear,
   busy,
@@ -27,71 +27,42 @@ export function SettingsPanel({
   hasItems,
   t,
 }: SettingsPanelProps) {
-  const [isDragging, setIsDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleFiles = (fileList: FileList | null) => {
-    if (!fileList || busy) return;
-    onAddFiles(Array.from(fileList));
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    handleFiles(e.dataTransfer.files);
-  };
-
   return (
-    <aside className="lg:col-span-4 space-y-3.5">
-      <label
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (!busy) setIsDragging(true);
-        }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        className={`flex items-center gap-3.5 bg-white border-2 border-dashed rounded-xl p-3.5 text-left transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 ${
-          isDragging
-            ? 'border-blue-600 bg-blue-50/70'
-            : 'border-slate-300 hover:border-slate-400'
-        } ${busy ? 'opacity-60 pointer-events-none' : ''}`}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPTED_DOCUMENT_TYPES}
-          multiple
-          disabled={busy}
-          onChange={(e) => {
-            handleFiles(e.target.files);
-            e.target.value = '';
-          }}
-          className="sr-only"
-        />
-        <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700 shrink-0">
-          <Upload className="w-4 h-4" aria-hidden="true" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="font-semibold text-xs sm:text-sm text-slate-900 leading-snug">
-            {t.uploadTitle}
-          </p>
-          <p className="mt-0.5 text-[11px] text-slate-500 truncate" title={t.uploadSubtitle}>
-            {t.uploadSubtitle}
-          </p>
-        </div>
-        <span className="inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0">
-          {t.uploadButton}
+    <aside className="lg:col-span-4 xl:col-span-3 bg-[#18191d] border border-[#262930] rounded-lg p-4 space-y-4">
+      <div>
+        <span className="block text-xs font-semibold text-[#9aa2b1] mb-2">
+          {t.presetsLabel}
         </span>
-      </label>
+        <div className="grid grid-cols-1 gap-1.5" role="group" aria-label={t.presetsLabel}>
+          {PRESET_ORDER.map((presetId) => {
+            const active = settings.preset === presetId;
+            return (
+              <button
+                key={presetId}
+                type="button"
+                disabled={busy}
+                onClick={() => onSelectPreset(presetId)}
+                aria-pressed={active}
+                title={t.presets[presetId].hint}
+                className={`w-full text-left px-3 py-2 rounded-md border text-xs transition-colors flex items-center justify-between gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff] ${
+                  active
+                    ? 'bg-[#222731] border-[#2f95ff]/70 text-white font-semibold'
+                    : 'bg-[#121316] border-[#262930] text-[#b4bccb] hover:text-white hover:border-[#353a46]'
+                }`}
+              >
+                <span className="truncate">{t.presets[presetId].label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3.5">
-        <h2 className="font-bold text-sm text-slate-950">{t.settingsTitle}</h2>
-
+      <div className="border-t border-[#262930] pt-4 space-y-3.5">
         <div>
-          <span className="block text-xs font-semibold text-slate-600 mb-1.5">
+          <span className="block text-xs font-semibold text-[#9aa2b1] mb-1.5">
             {t.outputModeLabel}
           </span>
-          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg">
+          <div className="grid grid-cols-2 gap-1 p-1 bg-[#121316] border border-[#262930] rounded-md">
             {(['split', 'merged'] as OutputMode[]).map((mode) => {
               const active = settings.outputMode === mode;
               return (
@@ -100,10 +71,8 @@ export function SettingsPanel({
                   type="button"
                   disabled={busy}
                   onClick={() => onUpdateSettings({ outputMode: mode, preset: 'custom' })}
-                  className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer disabled:opacity-55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
-                    active
-                      ? 'bg-white text-slate-950 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-950'
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff] ${
+                    active ? 'bg-[#262b35] text-white' : 'text-[#8e96a6] hover:text-white'
                   }`}
                 >
                   {mode === 'split' ? t.outputModes.split : t.outputModes.merged}
@@ -116,7 +85,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="size-limit-select"
-            className="block text-xs font-semibold text-slate-600 mb-1"
+            className="block text-xs font-semibold text-[#9aa2b1] mb-1.5"
           >
             {t.sizeLimitLabel}
           </label>
@@ -130,7 +99,7 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-9 bg-slate-50 border border-slate-300 rounded-lg px-2.5 text-xs sm:text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
+            className="w-full h-9 bg-[#121316] border border-[#2c303a] rounded-md px-2.5 text-xs text-[#eef0f4] focus:ring-2 focus:ring-[#2f95ff] focus:border-[#2f95ff] focus:outline-none disabled:opacity-50"
           >
             <option value={490}>{t.sizeLimits[490]}</option>
             <option value={950}>{t.sizeLimits[950]}</option>
@@ -142,7 +111,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="color-mode-select"
-            className="block text-xs font-semibold text-slate-600 mb-1"
+            className="block text-xs font-semibold text-[#9aa2b1] mb-1.5"
           >
             {t.colorModeLabel}
           </label>
@@ -156,48 +125,40 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-9 bg-slate-50 border border-slate-300 rounded-lg px-2.5 text-xs sm:text-sm text-slate-900 focus:ring-2 focus:ring-blue-600 focus:border-blue-600 focus:outline-none disabled:opacity-55"
+            className="w-full h-9 bg-[#121316] border border-[#2c303a] rounded-md px-2.5 text-xs text-[#eef0f4] focus:ring-2 focus:ring-[#2f95ff] focus:border-[#2f95ff] focus:outline-none disabled:opacity-50"
           >
             <option value="grayscale">{t.colorModes.grayscale}</option>
             <option value="bw_contrast">{t.colorModes.bw_contrast}</option>
             <option value="color">{t.colorModes.color}</option>
           </select>
         </div>
-
-        <dl className="pt-2.5 border-t border-slate-200 space-y-1.5 text-xs">
-          <div className="flex items-center justify-between gap-2">
-            <dt className="text-slate-500">{t.specResolution}</dt>
-            <dd className="font-medium text-slate-900 tabular-nums">{t.specResolutionVal}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <dt className="text-slate-500">{t.specPrivacy}</dt>
-            <dd className="font-medium text-emerald-700 tabular-nums">{t.specPrivacyVal}</dd>
-          </div>
-        </dl>
-
-        <div className="pt-1 flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!canConvert || busy}
-            onClick={onConvert}
-            className="flex-1 min-h-10 px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
-          >
-            {busy ? t.convertingBtn : t.convertBtn}
-          </button>
-
-          <button
-            type="button"
-            disabled={!hasItems || busy}
-            onClick={onClear}
-            className="min-h-10 px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
-          >
-            {t.clearBtn}
-          </button>
-        </div>
       </div>
 
-      <div className="flex items-start gap-2 px-1 text-[11px] text-slate-500 leading-snug">
-        <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="border-t border-[#262930] pt-4 space-y-2">
+        <button
+          type="button"
+          disabled={!canConvert || busy}
+          onClick={onConvert}
+          className="w-full min-h-10 px-4 py-2 rounded-md bg-[#2f95ff] hover:bg-[#1e85f2] text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff]"
+        >
+          {busy ? t.convertingBtn : t.convertBtn}
+        </button>
+
+        {hasItems && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClear}
+            className="w-full min-h-9 px-3 py-1.5 rounded-md border border-[#2c303a] bg-transparent hover:bg-[#21242c] text-[#a3aab8] hover:text-white text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff]"
+          >
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>{t.clearBtn}</span>
+          </button>
+        )}
+      </div>
+
+      <div className="pt-1 flex items-start gap-2 text-[11px] text-[#7c8496] leading-snug">
+        <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" aria-hidden="true" />
         <p>{t.localBadge}</p>
       </div>
     </aside>

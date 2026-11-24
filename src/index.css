@@ -1,15 +1,17 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
-    --font-display: 'Manrope', ui-sans-serif, system-ui, sans-serif;
-    --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-display: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Open Sans', ui-sans-serif, system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
   html {
     scroll-behavior: smooth;
     font-family: var(--font-sans);
+    color-scheme: dark;
   }
 
   h1, h2, h3, h4, .font-display {
