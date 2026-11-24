@@ -254,7 +254,7 @@ export default function App() {
     : undefined;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f4f5f7] dark:bg-[#121316] text-[#181b20] dark:text-[#eef0f4] transition-colors">
+    <div className="min-h-screen flex flex-col bg-[#fafafa] dark:bg-[#0b0c0f] text-neutral-900 dark:text-neutral-100 transition-colors">
       <Header
         lang={lang}
         onLangChange={setLang}
@@ -267,7 +267,7 @@ export default function App() {
 
       <main id="converter" className="flex-1">
         {activePage === 'files' && (
-          <div className="max-w-[1360px] mx-auto px-5 sm:px-8 pt-5 pb-10 grid lg:grid-cols-12 gap-6 items-start">
+          <div className="max-w-[1280px] mx-auto px-5 sm:px-8 pt-8 pb-14 grid lg:grid-cols-12 gap-8 items-start">
             <QueuePanel
               queue={queue}
               filter={filter}

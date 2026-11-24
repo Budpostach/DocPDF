@@ -51,25 +51,25 @@ export function PreviewModal({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-50 bg-slate-950/75 dark:bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
     >
-      <div className="bg-white dark:bg-[#18191d] rounded-lg max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-[#dce0e8] dark:border-[#2c303a] shadow-2xl">
-        <div className="px-5 py-3.5 border-b border-[#e2e5ec] dark:border-[#262930] flex flex-wrap items-center justify-between gap-3 bg-[#f8f9fb] dark:bg-[#1c1e23]">
+      <div className="bg-white dark:bg-[#13151a] rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-neutral-200 dark:border-white/[0.1] shadow-2xl">
+        <div className="px-5 py-3.5 border-b border-neutral-100 dark:border-white/[0.08] flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <h3
               id="preview-modal-title"
-              className="font-semibold text-sm text-[#14171c] dark:text-white truncate"
+              className="font-semibold text-sm text-neutral-950 dark:text-white truncate"
             >
               {current.name}
             </h3>
-            <p className="text-xs text-[#5c6473] dark:text-[#9aa2b1] tabular-nums mt-0.5 flex flex-wrap items-center gap-x-2">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 tabular-nums mt-0.5 flex flex-wrap items-center gap-x-2">
               <span>
                 {current.isMergedDocument
                   ? `${t.mergedLabel} (${current.pageCount} ${t.allPagesLabel})`
                   : `${t.pageShort} ${current.pageNum}`}
               </span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono text-[#181b20] dark:text-[#d0d6e0]">
+              <span className="font-mono text-neutral-800 dark:text-neutral-200">
                 {formatBytes(current.bytes.byteLength)}
               </span>
               <span aria-hidden="true">·</span>
@@ -78,8 +78,8 @@ export function PreviewModal({
               <span
                 className={
                   current.withinLimit
-                    ? 'text-emerald-700 dark:text-emerald-400 font-medium'
-                    : 'text-amber-700 dark:text-amber-400 font-medium'
+                    ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                    : 'text-amber-600 dark:text-amber-400 font-medium'
                 }
               >
                 {current.withinLimit ? t.withinLimitLabel : t.overLimitLabel}
@@ -87,7 +87,7 @@ export function PreviewModal({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {outputs.length > 1 && (
               <div className="inline-flex items-center gap-1 mr-1">
                 <button
@@ -95,7 +95,7 @@ export function PreviewModal({
                   disabled={!hasPrev}
                   onClick={() => onSelectIndex(activeIndex - 1)}
                   aria-label={t.prevPageBtn}
-                  className="min-h-9 px-2.5 py-1.5 rounded-md border border-[#d6dbe4] dark:border-[#2f3440] bg-white dark:bg-[#121316] hover:bg-[#f1f3f6] dark:hover:bg-[#23262f] text-[#333b48] dark:text-[#d0d6e0] disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-lg hover:bg-neutral-100 dark:hover:bg-white/[0.08] text-neutral-600 dark:text-neutral-300 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]"
                 >
                   <ChevronLeft className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -104,7 +104,7 @@ export function PreviewModal({
                   disabled={!hasNext}
                   onClick={() => onSelectIndex(activeIndex + 1)}
                   aria-label={t.nextPageBtn}
-                  className="min-h-9 px-2.5 py-1.5 rounded-md border border-[#d6dbe4] dark:border-[#2f3440] bg-white dark:bg-[#121316] hover:bg-[#f1f3f6] dark:hover:bg-[#23262f] text-[#333b48] dark:text-[#d0d6e0] disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-lg hover:bg-neutral-100 dark:hover:bg-white/[0.08] text-neutral-600 dark:text-neutral-300 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]"
                 >
                   <ChevronRight className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -114,7 +114,7 @@ export function PreviewModal({
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center gap-1.5 min-h-9 px-3.5 py-1.5 rounded-md bg-[#2285ee] hover:bg-[#1673d8] text-white text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
+              className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{t.downloadBtn}</span>
@@ -123,20 +123,20 @@ export function PreviewModal({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex items-center gap-1.5 min-h-9 px-3 py-1.5 rounded-md border border-[#d6dbe4] dark:border-[#2f3440] bg-white dark:bg-[#121316] hover:bg-[#f1f3f6] dark:hover:bg-[#23262f] text-[#333b48] dark:text-[#d0d6e0] text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
+              aria-label={t.closeBtn}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-lg hover:bg-neutral-100 dark:hover:bg-white/[0.08] text-neutral-500 dark:text-neutral-400 hover:text-neutral-950 dark:hover:text-white transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]"
             >
-              <X className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>{t.closeBtn}</span>
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
 
-        <div className="p-5 overflow-auto bg-[#e9ecf2] dark:bg-[#0f1013] flex-1 flex items-center justify-center">
+        <div className="p-6 overflow-auto bg-neutral-100 dark:bg-[#0b0c0f] flex-1 flex items-center justify-center">
           <img
             src={current.previewUrl}
             alt={current.name}
             referrerPolicy="no-referrer"
-            className="max-w-full max-h-[74vh] object-contain bg-white border border-[#cfd5e0] dark:border-[#2c303a] shadow-sm"
+            className="max-w-full max-h-[74vh] object-contain bg-white rounded shadow-md"
           />
         </div>
       </div>
