@@ -3,7 +3,7 @@ import JSZip from 'jszip';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { ColorMode, ConversionSettings, PageOutput, QueueItem } from '../types/pdf';
-import { renderExcelFileToCanvases } from './excelConverter';
+import { convertExcelToIntermediatePdf } from './excelConverter';
 import { renderWordFileToCanvases } from './wordConverter';
 
 // Bundle the worker locally with Vite so zero external CDNs are required.
@@ -451,18 +451,17 @@ export async function convertPdfDocument(
     const canvases = await renderWordFileToCanvases(file);
     return convertCanvasesToPdfDocument(canvases, file, settings, onProgress);
   }
-  if (isExcelFile(file)) {
-    const canvases = await renderExcelFileToCanvases(file);
-    return convertCanvasesToPdfDocument(canvases, file, settings, onProgress);
-  }
 
+  const fromExcel = isExcelFile(file);
   let doc: PDFDocumentProxy | null = null;
   let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
   const maxSizeBytes = settings.sizeLimitKb * 1024;
   const base = stripDocumentExtension(file.name);
 
   try {
-    const buffer = new Uint8Array(await file.arrayBuffer());
+    const buffer = fromExcel
+      ? await convertExcelToIntermediatePdf(file)
+      : new Uint8Array(await file.arrayBuffer());
     loadingTask = pdfjsLib.getDocument({
       data: buffer,
       useSystemFonts: true,
@@ -589,7 +588,7 @@ export async function convertPdfDocument(
         id: `${base}_merged_${crypto.randomUUID().slice(0, 6)}`,
         pageNum: 1,
         pageCount: totalPages,
-        name: `${base}_optimized.pdf`,
+        name: fromExcel ? `${base}.pdf` : `${base}_optimized.pdf`,
         bytes: finalBytes,
         previewUrl: URL.createObjectURL(firstPagePreviewBlob),
         dpi: finalDpi,

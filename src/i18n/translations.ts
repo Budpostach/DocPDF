@@ -168,7 +168,7 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Готові',
     emptyTitle: 'Черга порожня',
     emptyBody:
-      'Додайте файли PDF, DOC/DOCX або XLS/XLSX/CSV зліва. Таблиці та документи автоматично перетворюються у PDF через JPEG-оптимізацію під обраний ліміт розміру.',
+      'Додайте файли PDF, DOC/DOCX або XLS/XLSX/CSV зліва. Таблиці Excel конвертуються за схемою Excel → PDF → JPEG → PDF зі збереженням структури, меж та пропорцій.',
     emptyCta: 'Обрати файли',
     statusWait: 'У черзі',
     statusWorking: 'Обробка',
@@ -305,7 +305,7 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Complete',
     emptyTitle: 'Queue is empty',
     emptyBody:
-      'Add PDF, DOC/DOCX, or XLS/XLSX/CSV files on the left. Spreadsheets and documents are converted locally to size-compliant PDFs.',
+      'Add PDF, DOC/DOCX, or XLS/XLSX/CSV files on the left. Excel files follow the Excel → PDF → JPEG → PDF pipeline preserving column widths, merges, and borders.',
     emptyCta: 'Choose Files',
     statusWait: 'Queued',
     statusWorking: 'Processing',
