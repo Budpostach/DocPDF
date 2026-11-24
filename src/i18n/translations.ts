@@ -128,8 +128,8 @@ export const translations: Record<Language, TranslationDict> = {
         hint: 'Ручне налаштування',
       },
     },
-    uploadTitle: 'Оберіть PDF, DOC, DOCX або перетягніть сюди',
-    uploadSubtitle: 'Контракти, інвойси, специфікації, ВМД, банківські виписки',
+    uploadTitle: 'Оберіть PDF, Word або Excel',
+    uploadSubtitle: 'PDF, DOC, DOCX, XLS, XLSX, CSV — інвойси, специфікації, ВМД',
     uploadButton: 'Обрати файли',
     localBadge: 'Обробка локально в оперативній пам’яті браузера. Документи нікуди не передаються.',
     settingsTitle: 'Параметри конвертації',
@@ -152,7 +152,7 @@ export const translations: Record<Language, TranslationDict> = {
       color: 'Кольоровий (зберегти колір)',
     },
     specResolution: 'Роздільна здатність',
-    specResolutionVal: 'Автопідбір 300 → 85 DPI',
+    specResolutionVal: 'Автопідбір 300 → 50 DPI',
     specOutput: 'Режим',
     specOutputSplit: '1 сторінка = 1 PDF',
     specOutputMerged: 'Весь документ = 1 PDF',
@@ -168,7 +168,7 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Готові',
     emptyTitle: 'Черга порожня',
     emptyBody:
-      'Додайте один або кілька файлів PDF, DOC чи DOCX зліва. Документи Word автоматично перетворюються у PDF з обраним лімітом розміру та колірним режимом.',
+      'Додайте файли PDF, DOC/DOCX або XLS/XLSX/CSV зліва. Таблиці та документи автоматично перетворюються у PDF через JPEG-оптимізацію під обраний ліміт розміру.',
     emptyCta: 'Обрати файли',
     statusWait: 'У черзі',
     statusWorking: 'Обробка',
@@ -224,7 +224,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: '100% клієнтська обробка',
-        desc: 'Рендеринг PDF (PDF.js), розбір Word DOC/DOCX та складання підсумкового PDF (jsPDF) відбувається виключно у браузері на вашому пристрої.',
+        desc: 'Рендеринг PDF (PDF.js), розбір Word (DOC/DOCX) і Excel (XLS/XLSX/CSV) та складання підсумкового PDF відбуваються виключно у браузері.',
       },
       {
         title: 'Без сторонніх серверів',
@@ -265,8 +265,8 @@ export const translations: Record<Language, TranslationDict> = {
         hint: 'Manual configuration',
       },
     },
-    uploadTitle: 'Select PDF, DOC, DOCX or drop here',
-    uploadSubtitle: 'Contracts, commercial invoices, packing lists, customs declarations',
+    uploadTitle: 'Select PDF, Word, or Excel files',
+    uploadSubtitle: 'PDF, DOC, DOCX, XLS, XLSX, CSV — invoices, packing lists, specs',
     uploadButton: 'Select Files',
     localBadge: 'Processed locally in browser memory. Documents are never uploaded to any server.',
     settingsTitle: 'Conversion Settings',
@@ -289,7 +289,7 @@ export const translations: Record<Language, TranslationDict> = {
       color: 'Full Color (Preserve Color)',
     },
     specResolution: 'Resolution',
-    specResolutionVal: 'Auto-fit 300 → 85 DPI',
+    specResolutionVal: 'Auto-fit 300 → 50 DPI',
     specOutput: 'Mode',
     specOutputSplit: '1 page = 1 PDF',
     specOutputMerged: 'Full document = 1 PDF',
@@ -305,7 +305,7 @@ export const translations: Record<Language, TranslationDict> = {
     filterDone: 'Complete',
     emptyTitle: 'Queue is empty',
     emptyBody:
-      'Add one or more PDF, DOC, or DOCX files on the left. Word documents are converted directly to compliant PDFs with your chosen size cap and color profile.',
+      'Add PDF, DOC/DOCX, or XLS/XLSX/CSV files on the left. Spreadsheets and documents are converted locally to size-compliant PDFs.',
     emptyCta: 'Choose Files',
     statusWait: 'Queued',
     statusWorking: 'Processing',
@@ -361,7 +361,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: '100% Client-Side Execution',
-        desc: 'PDF rendering (PDF.js), Word DOC/DOCX parsing, and PDF assembly (jsPDF) run strictly inside your browser memory.',
+        desc: 'PDF rendering (PDF.js), Word (DOC/DOCX) and Excel (XLS/XLSX/CSV) parsing, and PDF assembly run strictly inside your browser memory.',
       },
       {
         title: 'Zero Server Uploads',

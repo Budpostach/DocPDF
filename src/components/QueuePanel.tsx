@@ -291,8 +291,8 @@ export function QueuePanel({
                           </span>
                         </button>
 
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
                             <p
                               className="text-xs font-semibold text-slate-900 truncate"
                               title={out.name}
@@ -301,10 +301,12 @@ export function QueuePanel({
                                 ? `${t.mergedLabel} (${out.pageCount} ${t.allPagesLabel})`
                                 : `${t.pageShort} ${out.pageNum}`}
                             </p>
-                            <p className="text-[11px] font-mono tabular-nums text-slate-600 mt-0.5 flex items-center gap-1.5">
+                            <p className="text-[11px] font-mono tabular-nums text-slate-600 whitespace-nowrap shrink-0 flex items-center gap-1">
                               <span
                                 className={
-                                  out.withinLimit ? 'text-emerald-700 font-medium' : 'text-amber-700 font-medium'
+                                  out.withinLimit
+                                    ? 'text-emerald-700 font-medium'
+                                    : 'text-amber-700 font-medium'
                                 }
                               >
                                 {formatBytes(out.bytes.byteLength)}
@@ -317,7 +319,7 @@ export function QueuePanel({
                           <button
                             type="button"
                             onClick={() => handleDownloadOutput(out)}
-                            className="inline-flex items-center gap-1 min-h-9 px-3 py-1.5 rounded-md bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+                            className="w-full inline-flex items-center justify-center gap-1.5 min-h-9 px-3 py-1.5 rounded-md bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
                           >
                             <Download className="w-3.5 h-3.5" aria-hidden="true" />
                             <span>{t.downloadBtn}</span>

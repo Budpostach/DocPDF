@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { ColorMode, ConversionSettings, PageOutput, QueueItem } from '../types/pdf';
+import { renderExcelFileToCanvases } from './excelConverter';
 import { renderWordFileToCanvases } from './wordConverter';
 
 // Bundle the worker locally with Vite so zero external CDNs are required.
@@ -15,7 +16,7 @@ const PDFJS_CMAP_URL = '/pdfjs/cmaps/';
 const PDFJS_STANDARD_FONT_URL = '/pdfjs/standard_fonts/';
 
 export const ACCEPTED_DOCUMENT_TYPES =
-  '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  '.pdf,.doc,.docx,.xlsx,.xls,.xlsm,.ods,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,text/csv';
 
 export function isWordFile(file: File): boolean {
   return (
@@ -25,17 +26,34 @@ export function isWordFile(file: File): boolean {
   );
 }
 
+export function isExcelFile(file: File): boolean {
+  return (
+    /\.(xlsx|xls|xlsm|ods|csv)$/i.test(file.name) ||
+    file.type === 'application/vnd.ms-excel' ||
+    file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    file.type === 'application/vnd.oasis.opendocument.spreadsheet' ||
+    file.type === 'text/csv'
+  );
+}
+
 export function isPdfFile(file: File): boolean {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 }
 
 export function isSupportedDocumentFile(file: File): boolean {
-  return isPdfFile(file) || isWordFile(file);
+  return isPdfFile(file) || isWordFile(file) || isExcelFile(file);
 }
 
-export function getDocumentFormatLabel(fileName: string): 'PDF' | 'DOCX' | 'DOC' {
+export function getDocumentFormatLabel(
+  fileName: string,
+): 'PDF' | 'DOCX' | 'DOC' | 'XLSX' | 'XLS' | 'ODS' | 'CSV' {
   if (/\.docx$/i.test(fileName)) return 'DOCX';
   if (/\.doc$/i.test(fileName)) return 'DOC';
+  if (/\.xlsx$/i.test(fileName)) return 'XLSX';
+  if (/\.xlsm$/i.test(fileName)) return 'XLSX';
+  if (/\.xls$/i.test(fileName)) return 'XLS';
+  if (/\.ods$/i.test(fileName)) return 'ODS';
+  if (/\.csv$/i.test(fileName)) return 'CSV';
   return 'PDF';
 }
 
@@ -103,7 +121,7 @@ function canvasToJpegBytes(
 }
 
 export function stripDocumentExtension(fileName: string): string {
-  return fileName.replace(/\.(pdf|docx?|DOCX?)$/i, '');
+  return fileName.replace(/\.(pdf|docx?|xlsx?|xlsm|ods|csv)$/i, '');
 }
 
 export function formatBytes(bytes: number): string {
@@ -158,14 +176,129 @@ export async function downloadAllOutputsAsZip(queue: QueueItem[]): Promise<void>
   saveBlobAsFile(blob, 'DocGate_PDF_Documents.zip');
 }
 
-const DPI_TIERS = [
-  { dpi: 300, quality: 0.9 },
-  { dpi: 200, quality: 0.82 },
-  { dpi: 150, quality: 0.74 },
-  { dpi: 120, quality: 0.66 },
-  { dpi: 100, quality: 0.58 },
-  { dpi: 85, quality: 0.52 },
+interface DpiRange {
+  dpi: number;
+  highQ: number;
+  lowQ: number;
+}
+
+const DPI_RANGES: DpiRange[] = [
+  { dpi: 300, highQ: 0.9, lowQ: 0.72 },
+  { dpi: 200, highQ: 0.84, lowQ: 0.58 },
+  { dpi: 150, highQ: 0.78, lowQ: 0.42 },
+  { dpi: 120, highQ: 0.72, lowQ: 0.32 },
+  { dpi: 100, highQ: 0.64, lowQ: 0.24 },
+  { dpi: 85, highQ: 0.56, lowQ: 0.2 },
+  { dpi: 72, highQ: 0.48, lowQ: 0.16 },
+  { dpi: 60, highQ: 0.4, lowQ: 0.14 },
+  { dpi: 50, highQ: 0.32, lowQ: 0.12 },
 ];
+
+function selectDpiSchedule(maxSizeBytes: number, pageCountForBudget: number): DpiRange[] {
+  const perPageBudget = maxSizeBytes / Math.max(1, pageCountForBudget);
+  if (perPageBudget >= 320 * 1024) {
+    return DPI_RANGES;
+  }
+  if (perPageBudget >= 150 * 1024) {
+    return DPI_RANGES.filter((r) => r.dpi <= 200);
+  }
+  if (perPageBudget >= 70 * 1024) {
+    return DPI_RANGES.filter((r) => r.dpi <= 150);
+  }
+  return DPI_RANGES.filter((r) => r.dpi <= 120);
+}
+
+interface RenderedPageFrame {
+  canvas: HTMLCanvasElement;
+  ptWidth: number;
+  ptHeight: number;
+}
+
+async function compileFramesToPdf(
+  frames: RenderedPageFrame[],
+  quality: number,
+): Promise<{ arrayBuf: ArrayBuffer; firstPageBlob: Blob | null }> {
+  let pdf: jsPDF | null = null;
+  let firstPageBlob: Blob | null = null;
+
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
+    const { blob, bytes: jpegBuf } = await canvasToJpegBytes(frame.canvas, quality);
+    if (i === 0) {
+      firstPageBlob = blob;
+    }
+
+    const orientation = frame.ptWidth > frame.ptHeight ? 'landscape' : 'portrait';
+    if (!pdf) {
+      pdf = new jsPDF({
+        orientation,
+        unit: 'pt',
+        format: [frame.ptWidth, frame.ptHeight],
+        compress: true,
+      });
+    } else {
+      pdf.addPage([frame.ptWidth, frame.ptHeight], orientation);
+    }
+
+    pdf.addImage(jpegBuf, 'JPEG', 0, 0, frame.ptWidth, frame.ptHeight, undefined, 'FAST');
+  }
+
+  return {
+    arrayBuf: pdf ? pdf.output('arraybuffer') : new ArrayBuffer(0),
+    firstPageBlob,
+  };
+}
+
+/**
+ * Finds the highest JPEG quality between lowQ and highQ on already-rendered
+ * canvases such that the compiled PDF fits within maxSizeBytes.
+ */
+async function solveQualityForFrames(
+  frames: RenderedPageFrame[],
+  highQ: number,
+  lowQ: number,
+  maxSizeBytes: number,
+): Promise<{
+  fits: boolean;
+  arrayBuf: ArrayBuffer;
+  firstPageBlob: Blob | null;
+}> {
+  const highTry = await compileFramesToPdf(frames, highQ);
+  if (highTry.arrayBuf.byteLength <= maxSizeBytes) {
+    return { fits: true, ...highTry };
+  }
+
+  const lowTry = await compileFramesToPdf(frames, lowQ);
+  if (lowTry.arrayBuf.byteLength > maxSizeBytes) {
+    return { fits: false, ...lowTry };
+  }
+
+  // Binary search (3 steps) between lowQ and highQ on the same rendered canvases
+  let lo = lowQ;
+  let hi = highQ;
+  let best = lowTry;
+
+  for (let step = 0; step < 3; step++) {
+    const mid = Number(((lo + hi) / 2).toFixed(2));
+    if (mid <= lo || mid >= hi) break;
+    const midTry = await compileFramesToPdf(frames, mid);
+    if (midTry.arrayBuf.byteLength <= maxSizeBytes) {
+      best = midTry;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  return { fits: true, ...best };
+}
+
+function disposeFrames(frames: RenderedPageFrame[]): void {
+  for (const frame of frames) {
+    frame.canvas.width = 0;
+    frame.canvas.height = 0;
+  }
+}
 
 function scaleMasterCanvasForDpi(
   master: HTMLCanvasElement,
@@ -187,19 +320,20 @@ function scaleMasterCanvasForDpi(
   return canvas;
 }
 
-async function convertWordDocument(
+async function convertCanvasesToPdfDocument(
+  masterCanvases: HTMLCanvasElement[],
   file: File,
   settings: ConversionSettings,
   onProgress: (currentPage: number, totalPages: number) => void,
 ): Promise<{ totalPages: number; outputs: PageOutput[] }> {
   const base = stripDocumentExtension(file.name);
   const maxSizeBytes = settings.sizeLimitKb * 1024;
-  const masterCanvases = await renderWordFileToCanvases(file);
   const totalPages = masterCanvases.length;
 
   try {
     if (settings.outputMode === 'split') {
       const outputs: PageOutput[] = [];
+      const schedule = selectDpiSchedule(maxSizeBytes, 1);
 
       for (let i = 0; i < totalPages; i++) {
         const p = i + 1;
@@ -207,37 +341,28 @@ async function convertWordDocument(
         await yieldFrame();
 
         const master = masterCanvases[i];
-        const ptWidth = 595.28;
+        const ptWidth = master.width > master.height ? 841.89 : 595.28;
         const ptHeight = Math.max(200, (ptWidth * master.height) / master.width);
 
         let chosenBytes: ArrayBuffer | null = null;
         let chosenBlob: Blob | null = null;
-        let chosenDpi = 85;
+        let chosenDpi = schedule[schedule.length - 1].dpi;
         let withinLimit = false;
 
-        for (let idx = 0; idx < DPI_TIERS.length; idx++) {
-          const tier = DPI_TIERS[idx];
+        for (let idx = 0; idx < schedule.length; idx++) {
+          const tier = schedule[idx];
           const canvas = scaleMasterCanvasForDpi(master, ptWidth, ptHeight, tier.dpi);
           applyColorFilter(canvas, settings.colorMode);
-          const { blob, bytes: jpegBuf } = await canvasToJpegBytes(canvas, tier.quality);
+          const frames: RenderedPageFrame[] = [{ canvas, ptWidth, ptHeight }];
 
-          const pdf = new jsPDF({
-            orientation: ptWidth > ptHeight ? 'landscape' : 'portrait',
-            unit: 'pt',
-            format: [ptWidth, ptHeight],
-            compress: true,
-          });
-          pdf.addImage(jpegBuf, 'JPEG', 0, 0, ptWidth, ptHeight, undefined, 'FAST');
-          const arrayBuf = pdf.output('arraybuffer');
+          const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
+          disposeFrames(frames);
 
-          canvas.width = 0;
-          canvas.height = 0;
-
-          if (arrayBuf.byteLength <= maxSizeBytes || idx === DPI_TIERS.length - 1) {
-            chosenBytes = arrayBuf;
-            chosenBlob = blob;
+          if (solved.fits || idx === schedule.length - 1) {
+            chosenBytes = solved.arrayBuf;
+            chosenBlob = solved.firstPageBlob;
             chosenDpi = tier.dpi;
-            withinLimit = arrayBuf.byteLength <= maxSizeBytes;
+            withinLimit = solved.fits;
             break;
           }
         }
@@ -259,59 +384,37 @@ async function convertWordDocument(
     }
 
     // Merged mode for DOC/DOCX
+    const schedule = selectDpiSchedule(maxSizeBytes, totalPages);
     let finalBytes: ArrayBuffer | null = null;
     let firstPagePreviewBlob: Blob | null = null;
-    let finalDpi = 85;
+    let finalDpi = schedule[schedule.length - 1].dpi;
     let withinLimit = false;
 
-    for (let idx = 0; idx < DPI_TIERS.length; idx++) {
-      const tier = DPI_TIERS[idx];
-      let mergedPdf: jsPDF | null = null;
-      let tierPreviewBlob: Blob | null = null;
+    for (let idx = 0; idx < schedule.length; idx++) {
+      const tier = schedule[idx];
+      const frames: RenderedPageFrame[] = [];
 
       for (let i = 0; i < totalPages; i++) {
-        const p = i + 1;
-        onProgress(p, totalPages);
+        onProgress(i + 1, totalPages);
         await yieldFrame();
 
         const master = masterCanvases[i];
-        const ptWidth = 595.28;
+        const ptWidth = master.width > master.height ? 841.89 : 595.28;
         const ptHeight = Math.max(200, (ptWidth * master.height) / master.width);
-
         const canvas = scaleMasterCanvasForDpi(master, ptWidth, ptHeight, tier.dpi);
         applyColorFilter(canvas, settings.colorMode);
-        const { blob, bytes: jpegBuf } = await canvasToJpegBytes(canvas, tier.quality);
-
-        if (i === 0) {
-          tierPreviewBlob = blob;
-        }
-
-        const orientation = ptWidth > ptHeight ? 'landscape' : 'portrait';
-        if (!mergedPdf) {
-          mergedPdf = new jsPDF({
-            orientation,
-            unit: 'pt',
-            format: [ptWidth, ptHeight],
-            compress: true,
-          });
-        } else {
-          mergedPdf.addPage([ptWidth, ptHeight], orientation);
-        }
-
-        mergedPdf.addImage(jpegBuf, 'JPEG', 0, 0, ptWidth, ptHeight, undefined, 'FAST');
-        canvas.width = 0;
-        canvas.height = 0;
+        frames.push({ canvas, ptWidth, ptHeight });
       }
 
-      if (mergedPdf) {
-        const arrayBuf = mergedPdf.output('arraybuffer');
-        if (arrayBuf.byteLength <= maxSizeBytes || idx === DPI_TIERS.length - 1) {
-          finalBytes = arrayBuf;
-          firstPagePreviewBlob = tierPreviewBlob;
-          finalDpi = tier.dpi;
-          withinLimit = arrayBuf.byteLength <= maxSizeBytes;
-          break;
-        }
+      const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
+      disposeFrames(frames);
+
+      if (solved.fits || idx === schedule.length - 1) {
+        finalBytes = solved.arrayBuf;
+        firstPagePreviewBlob = solved.firstPageBlob;
+        finalDpi = tier.dpi;
+        withinLimit = solved.fits;
+        break;
       }
     }
 
@@ -345,7 +448,12 @@ export async function convertPdfDocument(
   onProgress: (currentPage: number, totalPages: number) => void,
 ): Promise<{ totalPages: number; outputs: PageOutput[] }> {
   if (isWordFile(file)) {
-    return convertWordDocument(file, settings, onProgress);
+    const canvases = await renderWordFileToCanvases(file);
+    return convertCanvasesToPdfDocument(canvases, file, settings, onProgress);
+  }
+  if (isExcelFile(file)) {
+    const canvases = await renderExcelFileToCanvases(file);
+    return convertCanvasesToPdfDocument(canvases, file, settings, onProgress);
   }
 
   let doc: PDFDocumentProxy | null = null;
@@ -368,6 +476,7 @@ export async function convertPdfDocument(
 
     if (settings.outputMode === 'split') {
       const outputs: PageOutput[] = [];
+      const schedule = selectDpiSchedule(maxSizeBytes, 1);
 
       for (let p = 1; p <= totalPages; p++) {
         onProgress(p, totalPages);
@@ -378,11 +487,11 @@ export async function convertPdfDocument(
 
         let chosenBytes: ArrayBuffer | null = null;
         let chosenBlob: Blob | null = null;
-        let chosenDpi = 85;
+        let chosenDpi = schedule[schedule.length - 1].dpi;
         let withinLimit = false;
 
-        for (let idx = 0; idx < DPI_TIERS.length; idx++) {
-          const tier = DPI_TIERS[idx];
+        for (let idx = 0; idx < schedule.length; idx++) {
+          const tier = schedule[idx];
           const viewport = page.getViewport({ scale: tier.dpi / 72 });
           const w = Math.max(1, Math.ceil(viewport.width));
           const h = Math.max(1, Math.ceil(viewport.height));
@@ -395,26 +504,18 @@ export async function convertPdfDocument(
           }).promise;
 
           applyColorFilter(canvas, settings.colorMode);
+          const frames: RenderedPageFrame[] = [
+            { canvas, ptWidth: size.width, ptHeight: size.height },
+          ];
 
-          const { blob, bytes: jpegBuf } = await canvasToJpegBytes(canvas, tier.quality);
+          const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
+          disposeFrames(frames);
 
-          const pdf = new jsPDF({
-            orientation: size.width > size.height ? 'landscape' : 'portrait',
-            unit: 'pt',
-            format: [size.width, size.height],
-            compress: true,
-          });
-          pdf.addImage(jpegBuf, 'JPEG', 0, 0, size.width, size.height, undefined, 'FAST');
-          const arrayBuf = pdf.output('arraybuffer');
-
-          canvas.width = 0;
-          canvas.height = 0;
-
-          if (arrayBuf.byteLength <= maxSizeBytes || idx === DPI_TIERS.length - 1) {
-            chosenBytes = arrayBuf;
-            chosenBlob = blob;
+          if (solved.fits || idx === schedule.length - 1) {
+            chosenBytes = solved.arrayBuf;
+            chosenBlob = solved.firstPageBlob;
             chosenDpi = tier.dpi;
-            withinLimit = arrayBuf.byteLength <= maxSizeBytes;
+            withinLimit = solved.fits;
             break;
           }
         }
@@ -438,15 +539,15 @@ export async function convertPdfDocument(
     }
 
     // Merged mode: compile all pages into one PDF under maxSizeBytes
+    const schedule = selectDpiSchedule(maxSizeBytes, totalPages);
     let finalBytes: ArrayBuffer | null = null;
     let firstPagePreviewBlob: Blob | null = null;
-    let finalDpi = 85;
+    let finalDpi = schedule[schedule.length - 1].dpi;
     let withinLimit = false;
 
-    for (let idx = 0; idx < DPI_TIERS.length; idx++) {
-      const tier = DPI_TIERS[idx];
-      let mergedPdf: jsPDF | null = null;
-      let tierPreviewBlob: Blob | null = null;
+    for (let idx = 0; idx < schedule.length; idx++) {
+      const tier = schedule[idx];
+      const frames: RenderedPageFrame[] = [];
 
       for (let p = 1; p <= totalPages; p++) {
         onProgress(p, totalPages);
@@ -466,40 +567,19 @@ export async function convertPdfDocument(
         }).promise;
 
         applyColorFilter(canvas, settings.colorMode);
-        const { blob, bytes: jpegBuf } = await canvasToJpegBytes(canvas, tier.quality);
-
-        if (p === 1) {
-          tierPreviewBlob = blob;
-        }
-
-        const orientation = size.width > size.height ? 'landscape' : 'portrait';
-        if (!mergedPdf) {
-          mergedPdf = new jsPDF({
-            orientation,
-            unit: 'pt',
-            format: [size.width, size.height],
-            compress: true,
-          });
-        } else {
-          mergedPdf.addPage([size.width, size.height], orientation);
-        }
-
-        mergedPdf.addImage(jpegBuf, 'JPEG', 0, 0, size.width, size.height, undefined, 'FAST');
-
-        canvas.width = 0;
-        canvas.height = 0;
+        frames.push({ canvas, ptWidth: size.width, ptHeight: size.height });
         page.cleanup();
       }
 
-      if (mergedPdf) {
-        const arrayBuf = mergedPdf.output('arraybuffer');
-        if (arrayBuf.byteLength <= maxSizeBytes || idx === DPI_TIERS.length - 1) {
-          finalBytes = arrayBuf;
-          firstPagePreviewBlob = tierPreviewBlob;
-          finalDpi = tier.dpi;
-          withinLimit = arrayBuf.byteLength <= maxSizeBytes;
-          break;
-        }
+      const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
+      disposeFrames(frames);
+
+      if (solved.fits || idx === schedule.length - 1) {
+        finalBytes = solved.arrayBuf;
+        firstPagePreviewBlob = solved.firstPageBlob;
+        finalDpi = tier.dpi;
+        withinLimit = solved.fits;
+        break;
       }
     }
 
