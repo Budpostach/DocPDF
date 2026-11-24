@@ -1,6 +1,12 @@
 import { ShieldCheck, Trash2 } from 'lucide-react';
 import { TranslationDict } from '../i18n/translations';
-import { ColorMode, ConversionSettings, OutputMode, PresetId, SizeLimitKb } from '../types/pdf';
+import {
+  ColorMode,
+  ConversionSettings,
+  OutputMode,
+  PresetId,
+  SizeLimitKb,
+} from '../types/pdf';
 
 interface SettingsPanelProps {
   settings: ConversionSettings;
@@ -28,9 +34,9 @@ export function SettingsPanel({
   t,
 }: SettingsPanelProps) {
   return (
-    <aside className="lg:col-span-4 xl:col-span-3 bg-[#18191d] border border-[#262930] rounded-lg p-4 space-y-4">
+    <aside className="lg:col-span-4 xl:col-span-3 bg-white dark:bg-[#18191d] border border-[#e2e5ec] dark:border-[#262930] rounded-lg p-4 space-y-4 transition-colors">
       <div>
-        <span className="block text-xs font-semibold text-[#9aa2b1] mb-2">
+        <span className="block text-xs font-semibold text-[#525b6c] dark:text-[#9aa2b1] mb-2">
           {t.presetsLabel}
         </span>
         <div className="grid grid-cols-1 gap-1.5" role="group" aria-label={t.presetsLabel}>
@@ -44,10 +50,10 @@ export function SettingsPanel({
                 onClick={() => onSelectPreset(presetId)}
                 aria-pressed={active}
                 title={t.presets[presetId].hint}
-                className={`w-full text-left px-3 py-2 rounded-md border text-xs transition-colors flex items-center justify-between gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff] ${
+                className={`w-full text-left px-3 py-2 rounded-md border text-xs transition-colors flex items-center justify-between gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] ${
                   active
-                    ? 'bg-[#222731] border-[#2f95ff]/70 text-white font-semibold'
-                    : 'bg-[#121316] border-[#262930] text-[#b4bccb] hover:text-white hover:border-[#353a46]'
+                    ? 'bg-[#eef6ff] dark:bg-[#222731] border-[#2285ee] dark:border-[#2f95ff]/70 text-[#0f172a] dark:text-white font-semibold'
+                    : 'bg-[#f8f9fb] dark:bg-[#121316] border-[#dfe3ec] dark:border-[#262930] text-[#454d5c] dark:text-[#b4bccb] hover:text-[#14171c] dark:hover:text-white hover:border-[#c8cedb] dark:hover:border-[#353a46]'
                 }`}
               >
                 <span className="truncate">{t.presets[presetId].label}</span>
@@ -57,12 +63,12 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <div className="border-t border-[#262930] pt-4 space-y-3.5">
+      <div className="border-t border-[#e6e9f0] dark:border-[#262930] pt-4 space-y-3.5">
         <div>
-          <span className="block text-xs font-semibold text-[#9aa2b1] mb-1.5">
+          <span className="block text-xs font-semibold text-[#525b6c] dark:text-[#9aa2b1] mb-1.5">
             {t.outputModeLabel}
           </span>
-          <div className="grid grid-cols-2 gap-1 p-1 bg-[#121316] border border-[#262930] rounded-md">
+          <div className="grid grid-cols-2 gap-1 p-1 bg-[#f1f3f6] dark:bg-[#121316] border border-[#dfe3ec] dark:border-[#262930] rounded-md">
             {(['split', 'merged'] as OutputMode[]).map((mode) => {
               const active = settings.outputMode === mode;
               return (
@@ -71,8 +77,10 @@ export function SettingsPanel({
                   type="button"
                   disabled={busy}
                   onClick={() => onUpdateSettings({ outputMode: mode, preset: 'custom' })}
-                  className={`px-2.5 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff] ${
-                    active ? 'bg-[#262b35] text-white' : 'text-[#8e96a6] hover:text-white'
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] ${
+                    active
+                      ? 'bg-white dark:bg-[#262b35] text-[#14171c] dark:text-white shadow-2xs dark:shadow-none'
+                      : 'text-[#5c6473] dark:text-[#8e96a6] hover:text-[#14171c] dark:hover:text-white'
                   }`}
                 >
                   {mode === 'split' ? t.outputModes.split : t.outputModes.merged}
@@ -85,7 +93,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="size-limit-select"
-            className="block text-xs font-semibold text-[#9aa2b1] mb-1.5"
+            className="block text-xs font-semibold text-[#525b6c] dark:text-[#9aa2b1] mb-1.5"
           >
             {t.sizeLimitLabel}
           </label>
@@ -99,7 +107,7 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-9 bg-[#121316] border border-[#2c303a] rounded-md px-2.5 text-xs text-[#eef0f4] focus:ring-2 focus:ring-[#2f95ff] focus:border-[#2f95ff] focus:outline-none disabled:opacity-50"
+            className="w-full h-9 bg-[#f8f9fb] dark:bg-[#121316] border border-[#d6dbe4] dark:border-[#2c303a] rounded-md px-2.5 text-xs text-[#181b20] dark:text-[#eef0f4] focus:ring-2 focus:ring-[#2285ee] focus:border-[#2285ee] focus:outline-none disabled:opacity-50"
           >
             <option value={490}>{t.sizeLimits[490]}</option>
             <option value={950}>{t.sizeLimits[950]}</option>
@@ -111,7 +119,7 @@ export function SettingsPanel({
         <div>
           <label
             htmlFor="color-mode-select"
-            className="block text-xs font-semibold text-[#9aa2b1] mb-1.5"
+            className="block text-xs font-semibold text-[#525b6c] dark:text-[#9aa2b1] mb-1.5"
           >
             {t.colorModeLabel}
           </label>
@@ -125,7 +133,7 @@ export function SettingsPanel({
                 preset: 'custom',
               })
             }
-            className="w-full h-9 bg-[#121316] border border-[#2c303a] rounded-md px-2.5 text-xs text-[#eef0f4] focus:ring-2 focus:ring-[#2f95ff] focus:border-[#2f95ff] focus:outline-none disabled:opacity-50"
+            className="w-full h-9 bg-[#f8f9fb] dark:bg-[#121316] border border-[#d6dbe4] dark:border-[#2c303a] rounded-md px-2.5 text-xs text-[#181b20] dark:text-[#eef0f4] focus:ring-2 focus:ring-[#2285ee] focus:border-[#2285ee] focus:outline-none disabled:opacity-50"
           >
             <option value="grayscale">{t.colorModes.grayscale}</option>
             <option value="bw_contrast">{t.colorModes.bw_contrast}</option>
@@ -134,12 +142,12 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <div className="border-t border-[#262930] pt-4 space-y-2">
+      <div className="border-t border-[#e6e9f0] dark:border-[#262930] pt-4 space-y-2">
         <button
           type="button"
           disabled={!canConvert || busy}
           onClick={onConvert}
-          className="w-full min-h-10 px-4 py-2 rounded-md bg-[#2f95ff] hover:bg-[#1e85f2] text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff]"
+          className="w-full min-h-10 px-4 py-2 rounded-md bg-[#2285ee] hover:bg-[#1673d8] text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
         >
           {busy ? t.convertingBtn : t.convertBtn}
         </button>
@@ -149,7 +157,7 @@ export function SettingsPanel({
             type="button"
             disabled={busy}
             onClick={onClear}
-            className="w-full min-h-9 px-3 py-1.5 rounded-md border border-[#2c303a] bg-transparent hover:bg-[#21242c] text-[#a3aab8] hover:text-white text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f95ff]"
+            className="w-full min-h-9 px-3 py-1.5 rounded-md border border-[#d6dbe4] dark:border-[#2c303a] bg-transparent hover:bg-[#f1f3f6] dark:hover:bg-[#21242c] text-[#525b6c] dark:text-[#a3aab8] hover:text-[#14171c] dark:hover:text-white text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee]"
           >
             <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
             <span>{t.clearBtn}</span>
@@ -157,9 +165,14 @@ export function SettingsPanel({
         )}
       </div>
 
-      <div className="pt-1 flex items-start gap-2 text-[11px] text-[#7c8496] leading-snug">
-        <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" aria-hidden="true" />
-        <p>{t.localBadge}</p>
+      <div className="border-t border-[#e6e9f0] dark:border-[#262930] pt-3">
+        <div className="flex items-start gap-2 text-[11px] text-[#5c6473] dark:text-[#7c8496] leading-snug">
+          <ShieldCheck
+            className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-500 shrink-0 mt-0.5"
+            aria-hidden="true"
+          />
+          <p>{t.localBadge}</p>
+        </div>
       </div>
     </aside>
   );

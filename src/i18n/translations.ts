@@ -5,6 +5,8 @@ export interface TranslationDict {
   navConverter: string;
   navStandards: string;
   navPrivacy: string;
+  darkThemeLabel: string;
+  lightThemeLabel: string;
   workspaceTrailRoot: string;
   workspaceTrailActive: string;
   localBanner: string;
@@ -104,6 +106,8 @@ export const translations: Record<Language, TranslationDict> = {
     navConverter: 'Файли',
     navStandards: 'Вимоги',
     navPrivacy: 'Безпека',
+    darkThemeLabel: 'Темна тема',
+    lightThemeLabel: 'Світла тема',
     workspaceTrailRoot: 'Конвертер',
     workspaceTrailActive: 'PDF · Word · Excel',
     localBanner: 'Обробка відбувається локально у браузері — файли не завантажуються на сервер',
@@ -236,6 +240,8 @@ export const translations: Record<Language, TranslationDict> = {
     navConverter: 'Files',
     navStandards: 'Limits',
     navPrivacy: 'Privacy',
+    darkThemeLabel: 'Dark theme',
+    lightThemeLabel: 'Light theme',
     workspaceTrailRoot: 'Converter',
     workspaceTrailActive: 'PDF · Word · Excel',
     localBanner: '100% browser-local processing — your files never leave this device',

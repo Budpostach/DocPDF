@@ -1,5 +1,7 @@
 export type Language = 'ua' | 'en';
 
+export type ThemeMode = 'light' | 'dark';
+
 export type PresetId = 'customs_strict' | 'bank_split' | 'bank_single' | 'custom';
 
 export type OutputMode = 'split' | 'merged';

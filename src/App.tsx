@@ -12,7 +12,16 @@ import {
   isSupportedDocumentFile,
   revokeItemOutputs,
 } from './services/pdfConverter';
-import { ConversionSettings, Language, PresetId, QueueFilter, QueueItem } from './types/pdf';
+import {
+  ConversionSettings,
+  Language,
+  PresetId,
+  QueueFilter,
+  QueueItem,
+  ThemeMode,
+} from './types/pdf';
+
+const THEME_STORAGE_KEY = 'docgate_theme';
 
 const PRESET_CONFIGS: Record<Exclude<PresetId, 'custom'>, Omit<ConversionSettings, 'preset'>> = {
   customs_strict: {
@@ -32,8 +41,21 @@ const PRESET_CONFIGS: Record<Exclude<PresetId, 'custom'>, Omit<ConversionSetting
   },
 };
 
+function getInitialTheme(): ThemeMode {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'dark' || saved === 'light') {
+      return saved;
+    }
+  } catch {
+    // Ignore storage access restrictions
+  }
+  return 'light';
+}
+
 export default function App() {
   const [lang, setLang] = useState<Language>('ua');
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [settings, setSettings] = useState<ConversionSettings>({
     preset: 'customs_strict',
     ...PRESET_CONFIGS.customs_strict,
@@ -48,12 +70,25 @@ export default function App() {
   const t = translations[lang];
 
   useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore storage access restrictions
+    }
+  }, [theme]);
+
+  useEffect(() => {
     document.documentElement.lang = lang === 'ua' ? 'uk' : 'en';
     document.title =
       lang === 'ua'
         ? 'DocGate PDF — Конвертер документів для банків і митниці'
         : 'DocGate PDF — Bank & Customs PDF Converter';
   }, [lang]);
+
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
 
   const handleSelectPreset = (preset: PresetId) => {
     if (busy) return;
@@ -193,8 +228,14 @@ export default function App() {
     : undefined;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#121316] text-[#eef0f4]">
-      <Header lang={lang} onLangChange={setLang} t={t} />
+    <div className="min-h-screen flex flex-col bg-[#f4f5f7] dark:bg-[#121316] text-[#181b20] dark:text-[#eef0f4] transition-colors">
+      <Header
+        lang={lang}
+        onLangChange={setLang}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        t={t}
+      />
 
       <main id="converter" className="flex-1">
         <div className="max-w-[1360px] mx-auto px-5 sm:px-8 pt-5 pb-10 grid lg:grid-cols-12 gap-6 items-start">
