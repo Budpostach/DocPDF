@@ -27,6 +27,7 @@ interface NormalizedCell {
   colSpan: number;
   rowSpan: number;
   isCovered: boolean;
+  wrapText: boolean;
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -41,6 +42,8 @@ interface NormalizedCell {
 interface NormalizedSheet {
   name: string;
   orientation: 'portrait' | 'landscape';
+  explicitOrientation: boolean;
+  fitToHeightOne: boolean;
   colWidthsChars: number[];
   rows: NormalizedCell[][];
 }
@@ -186,6 +189,77 @@ function parseMergeRanges(
   return { origins, covered };
 }
 
+/**
+ * Emulates Excel's horizontal overflow: when an unmerged, left-aligned cell
+ * does not have wrapText enabled and its text exceeds the column width, it flows
+ * across adjacent empty cells to the right instead of wrapping into multiple lines.
+ */
+function expandHorizontalOverflow(rows: NormalizedCell[][], colWidthsChars: number[]): void {
+  const numCols = colWidthsChars.length;
+
+  for (const row of rows) {
+    for (let c = 0; c < numCols; c++) {
+      const cell = row[c];
+      if (
+        !cell ||
+        cell.isCovered ||
+        cell.colSpan > 1 ||
+        cell.rowSpan > 1 ||
+        cell.wrapText ||
+        cell.alignment !== 'left' ||
+        cell.borders[2]
+      ) {
+        continue;
+      }
+
+      const trimmed = cell.text.trim();
+      if (!trimmed) continue;
+
+      const lines = cell.text.split(/\r?\n/);
+      const maxLineChars = Math.max(...lines.map((l) => l.length));
+      const sizeFactor = (cell.fontSize / 9.5) * (cell.bold ? 1.08 : 1.0);
+      const neededChars = maxLineChars * sizeFactor + 1.5;
+
+      const currentColChars = colWidthsChars[c] ?? 9;
+      if (neededChars <= currentColChars * 0.92) continue;
+
+      let accumulatedChars = currentColChars;
+      let span = 1;
+
+      for (let k = c + 1; k < numCols; k++) {
+        if (accumulatedChars >= neededChars) break;
+        const next = row[k];
+        if (
+          !next ||
+          next.isCovered ||
+          next.colSpan > 1 ||
+          next.rowSpan > 1 ||
+          next.text.trim() !== '' ||
+          Boolean(next.fillColor) ||
+          next.borders[0] ||
+          next.borders[1] !== cell.borders[1] ||
+          next.borders[3] !== cell.borders[3]
+        ) {
+          break;
+        }
+
+        accumulatedChars += colWidthsChars[k] ?? 9;
+        span++;
+        next.isCovered = true;
+
+        if (next.borders[2]) {
+          cell.borders[2] = true;
+          break;
+        }
+      }
+
+      if (span > 1) {
+        cell.colSpan = span;
+      }
+    }
+  }
+}
+
 async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedSheet[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
@@ -206,7 +280,10 @@ async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedShee
 
     for (let r = 1; r <= rowLimit; r++) {
       const row = ws.getRow(r);
+      if (row.hidden) continue;
       for (let c = 1; c <= colLimit; c++) {
+        const col = ws.getColumn(c);
+        if (col.hidden) continue;
         const cell = row.getCell(c);
         const { text } = extractExcelJsCellText(cell);
         const hasText = text.trim() !== '';
@@ -248,32 +325,54 @@ async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedShee
       }
     }
 
+    // Track columns involved in merges so we don't break colSpan indices
+    const mergedCols = new Set<number>();
+    const mergedRows = new Set<number>();
+    for (const rangeStr of mergeList) {
+      const decoded = XLSX.utils.decode_range(rangeStr);
+      for (let r = decoded.s.r + 1; r <= decoded.e.r + 1; r++) mergedRows.add(r);
+      for (let c = decoded.s.c + 1; c <= decoded.e.c + 1; c++) mergedCols.add(c);
+    }
+
+    const keptCols: number[] = [];
     const colWidthsChars: number[] = [];
     let totalChars = 0;
     for (let c = minC; c <= maxC; c++) {
       const col = ws.getColumn(c);
-      const w = col?.width && col.width > 0 ? col.width : 9;
+      if (col.hidden && !mergedCols.has(c)) continue;
+      keptCols.push(c);
+      const w = col.hidden ? 0.5 : col?.width && col.width > 0 ? col.width : 9;
       colWidthsChars.push(w);
       totalChars += w;
     }
 
-    const explicitOrientation = ws.pageSetup?.orientation;
+    if (keptCols.length === 0) continue;
+
+    const explicitOrientationRaw = ws.pageSetup?.orientation;
+    const explicitOrientation =
+      explicitOrientationRaw === 'landscape' || explicitOrientationRaw === 'portrait';
     const orientation: 'portrait' | 'landscape' =
-      explicitOrientation === 'landscape'
+      explicitOrientationRaw === 'landscape'
         ? 'landscape'
-        : explicitOrientation === 'portrait'
+        : explicitOrientationRaw === 'portrait'
           ? 'portrait'
-          : totalChars > 92 || maxC - minC + 1 >= 7
+          : totalChars > 92 || keptCols.length >= 7
             ? 'landscape'
             : 'portrait';
+
+    const fitToHeightOne = Boolean(
+      ws.pageSetup?.fitToPage &&
+        (ws.pageSetup?.fitToHeight === 1 || ws.pageSetup?.fitToHeight === undefined),
+    );
 
     const rows: NormalizedCell[][] = [];
 
     for (let r = minR; r <= maxR; r++) {
       const excelRow = ws.getRow(r);
+      if (excelRow.hidden && !mergedRows.has(r)) continue;
       const rowCells: NormalizedCell[] = [];
 
-      for (let c = minC; c <= maxC; c++) {
+      for (const c of keptCols) {
         const key = `${r}:${c}`;
         if (covered.has(key)) {
           rowCells.push({
@@ -281,6 +380,7 @@ async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedShee
             colSpan: 1,
             rowSpan: 1,
             isCovered: true,
+            wrapText: false,
             bold: false,
             italic: false,
             underline: false,
@@ -349,6 +449,7 @@ async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedShee
           colSpan: merge?.colSpan ?? 1,
           rowSpan: merge?.rowSpan ?? 1,
           isCovered: false,
+          wrapText: Boolean(align.wrapText),
           bold: Boolean(font.bold),
           italic: Boolean(font.italic),
           underline: Boolean(font.underline),
@@ -364,9 +465,13 @@ async function parseXlsxWithExcelJs(buffer: ArrayBuffer): Promise<NormalizedShee
       rows.push(rowCells);
     }
 
+    expandHorizontalOverflow(rows, colWidthsChars);
+
     sheets.push({
       name: ws.name,
       orientation,
+      explicitOrientation,
+      fitToHeightOne,
       colWidthsChars,
       rows,
     });
@@ -467,6 +572,7 @@ function parseLegacySpreadsheetWithSheetJs(bytes: Uint8Array, fileName: string):
             colSpan: 1,
             rowSpan: 1,
             isCovered: true,
+            wrapText: false,
             bold: false,
             italic: false,
             underline: false,
@@ -486,6 +592,7 @@ function parseLegacySpreadsheetWithSheetJs(bytes: Uint8Array, fileName: string):
           colSpan: merge?.colSpan ?? 1,
           rowSpan: merge?.rowSpan ?? 1,
           isCovered: false,
+          wrapText: false,
           bold: r === minR,
           italic: false,
           underline: false,
@@ -502,6 +609,8 @@ function parseLegacySpreadsheetWithSheetJs(bytes: Uint8Array, fileName: string):
     sheets.push({
       name,
       orientation,
+      explicitOrientation: false,
+      fitToHeightOne: false,
       colWidthsChars,
       rows,
     });
@@ -510,107 +619,246 @@ function parseLegacySpreadsheetWithSheetJs(bytes: Uint8Array, fileName: string):
   return sheets;
 }
 
-function buildPdfMakeDefinition(sheets: NormalizedSheet[]): TDocumentDefinitions {
-  const firstOrientation = sheets[0]?.orientation ?? 'portrait';
-  const showSheetHeaders = sheets.length > 1;
-  const content: Content[] = [];
+const PAGE_MARGIN_PT = 14;
 
-  sheets.forEach((sheet, sIdx) => {
-    const usableWidthPt = sheet.orientation === 'landscape' ? 801.89 : 555.28;
-    const totalChars = sheet.colWidthsChars.reduce((sum, w) => sum + w, 0) || 1;
-    // Approx 5.4 pt per Excel char unit; compute scale factor if sheet is wider than page
-    const rawTotalPt = totalChars * 5.4;
-    const fontScale = Math.min(1, Math.max(0.62, usableWidthPt / Math.max(1, rawTotalPt)));
+function buildSheetContent(
+  sheet: NormalizedSheet,
+  heightScale: number,
+  showSheetHeader: boolean,
+  isSubsequentSheet: boolean,
+): Content[] {
+  const numCols = Math.max(1, sheet.colWidthsChars.length);
+  const pageWidthPt = sheet.orientation === 'landscape' ? 841.89 : 595.28;
+  const usableWidthPt = pageWidthPt - PAGE_MARGIN_PT * 2;
 
-    const widths = sheet.colWidthsChars.map((w) =>
-      Math.max(12, Number(((w / totalChars) * usableWidthPt).toFixed(2))),
-    );
-    // Normalize widths sum to exactly usableWidthPt
-    const sumW = widths.reduce((a, b) => a + b, 0);
-    if (widths.length > 0 && Math.abs(sumW - usableWidthPt) > 0.5) {
-      widths[0] = Number((widths[0] + (usableWidthPt - sumW)).toFixed(2));
-    }
+  const padX = Math.max(1.2, Number((2.5 * Math.min(1, heightScale + 0.15)).toFixed(2)));
+  const padY = Math.max(0.5, Number((2.0 * heightScale).toFixed(2)));
+  const vLineW = 0.5;
+  const hLineW = 0.5;
 
-    if (showSheetHeaders) {
-      content.push({
-        text: sheet.name,
-        fontSize: 10,
-        bold: true,
-        color: '#0f172a',
-        margin: [0, sIdx === 0 ? 0 : 8, 0, 4],
-        ...(sIdx > 0 ? { pageBreak: 'before' as const, pageOrientation: sheet.orientation } : {}),
-      });
-    } else if (sIdx > 0) {
-      content.push({
-        text: '',
-        pageBreak: 'before',
-        pageOrientation: sheet.orientation,
-      });
-    }
+  // pdfmake adds (paddingLeft + paddingRight) per column + vLineWidth for vertical grid lines
+  const tableChromeWidth = numCols * (padX * 2) + (numCols + 1) * vLineW + 2;
+  const availableInnerWidthPt = Math.max(60, usableWidthPt - tableChromeWidth);
 
-    const body: TableCell[][] = sheet.rows.map((row) =>
-      row.map((cell): TableCell => {
-        if (cell.isCovered) {
-          return { text: '' };
-        }
+  const totalChars = sheet.colWidthsChars.reduce((sum, w) => sum + w, 0) || 1;
+  const rawTotalPt = totalChars * 5.4;
+  const widthFontScale = Math.min(1, Math.max(0.55, availableInnerWidthPt / Math.max(1, rawTotalPt)));
+  const combinedFontScale = widthFontScale * heightScale;
 
-        const scaledSize = Math.max(6.2, Number((cell.fontSize * fontScale).toFixed(1)));
-        const outCell: any = {
-          text: cell.text,
-          fontSize: scaledSize,
-          bold: cell.bold,
-          italics: cell.italic,
-          decoration: cell.underline ? 'underline' : undefined,
-          alignment: cell.alignment,
-          border: cell.borders,
-          margin: [0, 0, 0, 0],
-        };
+  const minColW = Math.min(10, availableInnerWidthPt / numCols);
+  const rawWidths = sheet.colWidthsChars.map((w) =>
+    Math.max(minColW, (w / totalChars) * availableInnerWidthPt),
+  );
+  const rawSum = rawWidths.reduce((a, b) => a + b, 0) || 1;
+  const widthAdjust = availableInnerWidthPt / rawSum;
+  const widths = rawWidths.map((w) => Number((w * widthAdjust).toFixed(2)));
 
-        if (cell.colSpan > 1) outCell.colSpan = cell.colSpan;
-        if (cell.rowSpan > 1) outCell.rowSpan = cell.rowSpan;
-        if (cell.color) outCell.color = cell.color;
-        if (cell.fillColor) outCell.fillColor = cell.fillColor;
-        if (cell.borderColor) outCell.borderColor = [
+  const items: Content[] = [];
+
+  if (showSheetHeader) {
+    items.push({
+      text: sheet.name,
+      fontSize: Math.max(7, Number((9.5 * Math.min(1, heightScale + 0.15)).toFixed(1))),
+      bold: true,
+      color: '#0f172a',
+      margin: [0, 0, 0, Math.max(1.5, Number((3 * heightScale).toFixed(1)))],
+      ...(isSubsequentSheet
+        ? { pageBreak: 'before' as const, pageOrientation: sheet.orientation }
+        : {}),
+    });
+  } else if (isSubsequentSheet) {
+    items.push({
+      text: '',
+      fontSize: 1,
+      margin: [0, 0, 0, 0],
+      pageBreak: 'before',
+      pageOrientation: sheet.orientation,
+    });
+  }
+
+  const lineHeight = Math.max(0.98, Number((1.0 + 0.12 * heightScale).toFixed(2)));
+  const blankRowHeight = Math.max(3, Number((9 * heightScale).toFixed(1)));
+  const minReadablePt = heightScale < 0.6 ? 4.8 : 5.6;
+
+  const body: TableCell[][] = sheet.rows.map((row) =>
+    row.map((cell): TableCell => {
+      if (cell.isCovered) {
+        return { text: '' };
+      }
+
+      const scaledSize = Math.max(minReadablePt, Number((cell.fontSize * combinedFontScale).toFixed(1)));
+      const outCell: any = {
+        text: cell.text,
+        fontSize: scaledSize,
+        lineHeight,
+        bold: cell.bold,
+        italics: cell.italic,
+        decoration: cell.underline ? 'underline' : undefined,
+        alignment: cell.alignment,
+        border: cell.borders,
+        margin: [0, 0, 0, 0],
+      };
+
+      if (cell.colSpan > 1) outCell.colSpan = cell.colSpan;
+      if (cell.rowSpan > 1) outCell.rowSpan = cell.rowSpan;
+      if (cell.color) outCell.color = cell.color;
+      if (cell.fillColor) outCell.fillColor = cell.fillColor;
+      if (cell.borderColor) {
+        outCell.borderColor = [
           cell.borderColor,
           cell.borderColor,
           cell.borderColor,
           cell.borderColor,
         ];
+      }
 
-        return outCell;
-      }),
-    );
+      return outCell;
+    }),
+  );
 
-    content.push({
-      table: {
-        widths,
-        body,
-        dontBreakRows: true,
-        heights: (rowIdx: number) =>
-          sheet.rows[rowIdx]?.every((c) => !c.text.trim()) ? 11 : 'auto',
-      },
-      layout: {
-        hLineWidth: () => 0.5,
-        vLineWidth: () => 0.5,
-        hLineColor: () => '#64748b',
-        vLineColor: () => '#64748b',
-        paddingLeft: () => 3,
-        paddingRight: () => 3,
-        paddingTop: () => 2,
-        paddingBottom: () => 2,
-      },
-    });
+  items.push({
+    table: {
+      widths,
+      body,
+      dontBreakRows: true,
+      heights: (rowIdx: number) =>
+        sheet.rows[rowIdx]?.every((c) => !c.text.trim()) ? blankRowHeight : 'auto',
+    },
+    layout: {
+      hLineWidth: () => hLineW,
+      vLineWidth: () => vLineW,
+      hLineColor: () => '#64748b',
+      vLineColor: () => '#64748b',
+      paddingLeft: () => padX,
+      paddingRight: () => padX,
+      paddingTop: () => padY,
+      paddingBottom: () => padY,
+    },
+  });
+
+  return items;
+}
+
+function countPdfPagesFromBuffer(pdfBytes: Uint8Array): number {
+  const raw = new TextDecoder('latin1').decode(pdfBytes);
+  const matches = raw.match(/\/Type\s*\/Page(?!s)\b/g);
+  return matches ? matches.length : 1;
+}
+
+async function measureSheetPageCount(
+  sheet: NormalizedSheet,
+  heightScale: number,
+  showSheetHeader: boolean,
+): Promise<number> {
+  const def: TDocumentDefinitions = {
+    pageSize: 'A4',
+    pageOrientation: sheet.orientation,
+    pageMargins: [PAGE_MARGIN_PT, PAGE_MARGIN_PT, PAGE_MARGIN_PT, PAGE_MARGIN_PT],
+    defaultStyle: {
+      font: 'Roboto',
+      fontSize: 9,
+      color: '#0f172a',
+      lineHeight: 1.12,
+    },
+    content: buildSheetContent(sheet, heightScale, showSheetHeader, false),
+  };
+
+  const buf: Uint8Array = await pdfMake.createPdf(def).getBuffer();
+  return countPdfPagesFromBuffer(buf);
+}
+
+async function solveOptimalScaleForSheet(
+  sheet: NormalizedSheet,
+  showSheetHeader: boolean,
+): Promise<number> {
+  const pagesAtFull = await measureSheetPageCount(sheet, 1.0, showSheetHeader);
+  if (pagesAtFull <= 1) {
+    return 1.0;
+  }
+
+  // Huge tables (> 105 rows) without explicit fitToHeight=1 should remain legible across pages
+  if (!sheet.fitToHeightOne && sheet.rows.length > 105) {
+    return 0.85;
+  }
+
+  const minScale = sheet.fitToHeightOne ? 0.34 : 0.44;
+  const pagesAtMin = await measureSheetPageCount(sheet, minScale, showSheetHeader);
+
+  if (pagesAtMin > 1) {
+    // Even at minimum scale it spans multiple pages; if orientation was auto-picked as portrait,
+    // check whether landscape fits onto 1 page cleanly
+    if (!sheet.explicitOrientation && sheet.orientation === 'portrait') {
+      const prevOrientation = sheet.orientation;
+      sheet.orientation = 'landscape';
+      const pagesLandscape = await measureSheetPageCount(sheet, minScale, showSheetHeader);
+      if (pagesLandscape <= 1) {
+        // Binary search landscape scale
+        let lo = minScale;
+        let hi = 1.0;
+        let best = minScale;
+        for (let step = 0; step < 5; step++) {
+          const mid = Number(((lo + hi) / 2).toFixed(2));
+          if (mid <= lo || mid >= hi) break;
+          const p = await measureSheetPageCount(sheet, mid, showSheetHeader);
+          if (p <= 1) {
+            best = mid;
+            lo = mid;
+          } else {
+            hi = mid;
+          }
+        }
+        return best;
+      }
+      sheet.orientation = prevOrientation;
+    }
+
+    return sheet.fitToHeightOne ? minScale : 0.78;
+  }
+
+  // Binary search the largest scale between minScale and 1.0 that still fits on 1 page
+  let lo = minScale;
+  let hi = 1.0;
+  let best = minScale;
+
+  for (let step = 0; step < 5; step++) {
+    const mid = Number(((lo + hi) / 2).toFixed(2));
+    if (mid <= lo || mid >= hi) break;
+    const pages = await measureSheetPageCount(sheet, mid, showSheetHeader);
+    if (pages <= 1) {
+      best = mid;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  return best;
+}
+
+async function buildPdfMakeDefinition(sheets: NormalizedSheet[]): Promise<TDocumentDefinitions> {
+  const showSheetHeaders = sheets.length > 1;
+  const scales: number[] = [];
+
+  for (const sheet of sheets) {
+    scales.push(await solveOptimalScaleForSheet(sheet, showSheetHeaders));
+  }
+
+  const firstOrientation = sheets[0]?.orientation ?? 'portrait';
+  const content: Content[] = [];
+
+  sheets.forEach((sheet, sIdx) => {
+    content.push(...buildSheetContent(sheet, scales[sIdx], showSheetHeaders, sIdx > 0));
   });
 
   return {
     pageSize: 'A4',
     pageOrientation: firstOrientation,
-    pageMargins: [20, 20, 20, 20],
+    pageMargins: [PAGE_MARGIN_PT, PAGE_MARGIN_PT, PAGE_MARGIN_PT, PAGE_MARGIN_PT],
     defaultStyle: {
       font: 'Roboto',
       fontSize: 9,
       color: '#0f172a',
-      lineHeight: 1.15,
+      lineHeight: 1.12,
     },
     content,
   };
@@ -619,7 +867,8 @@ function buildPdfMakeDefinition(sheets: NormalizedSheet[]): TDocumentDefinitions
 /**
  * Step 1 of Excel -> PDF -> JPEG -> PDF:
  * Converts an Excel/CSV spreadsheet into an intermediate vector PDF (Uint8Array)
- * preserving column proportions, merged cells, borders, alignments, and typography.
+ * preserving column proportions, merged cells, borders, alignments, and fitting
+ * each worksheet cleanly onto 1 page without right-edge clipping.
  */
 export async function convertExcelToIntermediatePdf(file: File): Promise<Uint8Array> {
   ensurePdfMakeFonts();
@@ -644,7 +893,7 @@ export async function convertExcelToIntermediatePdf(file: File): Promise<Uint8Ar
     throw new Error('Spreadsheet contains no data');
   }
 
-  const docDefinition = buildPdfMakeDefinition(sheets);
+  const docDefinition = await buildPdfMakeDefinition(sheets);
   const pdfDoc = pdfMake.createPdf(docDefinition);
   const outBuffer: Uint8Array = await pdfDoc.getBuffer();
   return outBuffer instanceof Uint8Array ? outBuffer : new Uint8Array(outBuffer);
