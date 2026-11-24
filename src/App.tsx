@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { Header } from './components/Header';
 import { PreviewModal } from './components/PreviewModal';
 import { QueuePanel } from './components/QueuePanel';
@@ -254,6 +255,7 @@ export default function App() {
           t={t}
         />
       )}
+      <Analytics />
     </div>
   );
 }
