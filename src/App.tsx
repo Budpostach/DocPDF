@@ -4,7 +4,7 @@ import { Header } from './components/Header';
 import { PreviewModal } from './components/PreviewModal';
 import { QueuePanel } from './components/QueuePanel';
 import { SettingsPanel } from './components/SettingsPanel';
-import { StandardsSection } from './components/StandardsSection';
+import { PrivacyPage, StandardsPage } from './components/StandardsSection';
 import { translations } from './i18n/translations';
 import {
   convertPdfDocument,
@@ -13,6 +13,7 @@ import {
   revokeItemOutputs,
 } from './services/pdfConverter';
 import {
+  AppPage,
   ConversionSettings,
   Language,
   PresetId,
@@ -53,9 +54,17 @@ function getInitialTheme(): ThemeMode {
   return 'light';
 }
 
+function getPageFromHash(): AppPage {
+  const hash = window.location.hash.toLowerCase();
+  if (hash === '#standards') return 'standards';
+  if (hash === '#privacy') return 'privacy';
+  return 'files';
+}
+
 export default function App() {
   const [lang, setLang] = useState<Language>('ua');
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [activePage, setActivePage] = useState<AppPage>(getPageFromHash);
   const [settings, setSettings] = useState<ConversionSettings>({
     preset: 'customs_strict',
     ...PRESET_CONFIGS.customs_strict,
@@ -68,6 +77,14 @@ export default function App() {
   );
 
   const t = translations[lang];
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActivePage(getPageFromHash());
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -85,6 +102,15 @@ export default function App() {
         ? 'DocGate PDF — Конвертер документів для банків і митниці'
         : 'DocGate PDF — Bank & Customs PDF Converter';
   }, [lang]);
+
+  const handleNavigate = (page: AppPage) => {
+    setActivePage(page);
+    const nextHash = page === 'files' ? '#files' : `#${page}`;
+    if (window.location.hash !== nextHash) {
+      window.history.pushState(null, '', nextHash);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
@@ -234,43 +260,53 @@ export default function App() {
         onLangChange={setLang}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        activePage={activePage}
+        onNavigate={handleNavigate}
         t={t}
       />
 
       <main id="converter" className="flex-1">
-        <div className="max-w-[1360px] mx-auto px-5 sm:px-8 pt-5 pb-10 grid lg:grid-cols-12 gap-6 items-start">
-          <QueuePanel
-            queue={queue}
-            filter={filter}
-            onFilterChange={setFilter}
-            onAddFiles={handleAddFiles}
-            onRemoveItem={handleRemoveItem}
-            onReconvertItem={handleReconvertItem}
-            onPreviewOutput={(item, index) =>
-              setPreviewTarget({ itemId: item.id, index })
-            }
-            onDownloadAllZip={handleDownloadAllZip}
-            busy={busy}
-            t={t}
-          />
+        {activePage === 'files' && (
+          <div className="max-w-[1360px] mx-auto px-5 sm:px-8 pt-5 pb-10 grid lg:grid-cols-12 gap-6 items-start">
+            <QueuePanel
+              queue={queue}
+              filter={filter}
+              onFilterChange={setFilter}
+              onAddFiles={handleAddFiles}
+              onRemoveItem={handleRemoveItem}
+              onReconvertItem={handleReconvertItem}
+              onPreviewOutput={(item, index) =>
+                setPreviewTarget({ itemId: item.id, index })
+              }
+              onDownloadAllZip={handleDownloadAllZip}
+              busy={busy}
+              t={t}
+            />
 
-          <SettingsPanel
-            settings={settings}
-            onSelectPreset={handleSelectPreset}
-            onUpdateSettings={handleUpdateSettings}
-            onConvert={handleConvertPending}
-            onClear={handleClearQueue}
-            busy={busy}
-            canConvert={canConvert}
-            hasItems={queue.length > 0}
-            t={t}
-          />
-        </div>
+            <SettingsPanel
+              settings={settings}
+              onSelectPreset={handleSelectPreset}
+              onUpdateSettings={handleUpdateSettings}
+              onConvert={handleConvertPending}
+              onClear={handleClearQueue}
+              busy={busy}
+              canConvert={canConvert}
+              hasItems={queue.length > 0}
+              t={t}
+            />
+          </div>
+        )}
 
-        <StandardsSection t={t} />
+        {activePage === 'standards' && (
+          <StandardsPage onBackToFiles={() => handleNavigate('files')} t={t} />
+        )}
+
+        {activePage === 'privacy' && (
+          <PrivacyPage onBackToFiles={() => handleNavigate('files')} t={t} />
+        )}
       </main>
 
-      <Footer t={t} />
+      <Footer onNavigate={handleNavigate} t={t} />
 
       {previewItem && previewTarget && (
         <PreviewModal

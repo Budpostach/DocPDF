@@ -1,20 +1,54 @@
 import { Phone } from 'lucide-react';
 import { TranslationDict } from '../i18n/translations';
+import { AppPage } from '../types/pdf';
 
 interface FooterProps {
+  onNavigate: (page: AppPage) => void;
   t: TranslationDict;
 }
 
 const PHONES = [{ display: '+380660647854', href: 'tel:+380660647854' }];
 
-export function Footer({ t }: FooterProps) {
+export function Footer({ onNavigate, t }: FooterProps) {
   return (
     <footer className="border-t border-[#e2e5ec] dark:border-[#242730] bg-white dark:bg-[#16171b] transition-colors">
       <div className="max-w-[1360px] mx-auto px-5 sm:px-8 py-5 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-[#5c6473] dark:text-[#8e96a6]">
-        <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-2.5 gap-y-1">
+        <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3 gap-y-1.5">
           <span className="font-semibold text-[#181b20] dark:text-[#d0d6e0]">{t.footerCopy}</span>
           <span aria-hidden="true">·</span>
           <span>{t.footerNote}</span>
+          <span className="sm:hidden inline-flex items-center gap-2.5 ml-1">
+            <a
+              href="#files"
+              onClick={(e) => {
+                e.preventDefault();
+                onNavigate('files');
+              }}
+              className="hover:text-[#14171c] dark:hover:text-white underline underline-offset-2"
+            >
+              {t.navConverter}
+            </a>
+            <a
+              href="#standards"
+              onClick={(e) => {
+                e.preventDefault();
+                onNavigate('standards');
+              }}
+              className="hover:text-[#14171c] dark:hover:text-white underline underline-offset-2"
+            >
+              {t.navStandards}
+            </a>
+            <a
+              href="#privacy"
+              onClick={(e) => {
+                e.preventDefault();
+                onNavigate('privacy');
+              }}
+              className="hover:text-[#14171c] dark:hover:text-white underline underline-offset-2"
+            >
+              {t.navPrivacy}
+            </a>
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2.5">

@@ -1,24 +1,44 @@
 import { Globe, Moon, Sun } from 'lucide-react';
 import { useState } from 'react';
 import { TranslationDict } from '../i18n/translations';
-import { Language, ThemeMode } from '../types/pdf';
+import { AppPage, Language, ThemeMode } from '../types/pdf';
 
 interface HeaderProps {
   lang: Language;
   onLangChange: (lang: Language) => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
+  activePage: AppPage;
+  onNavigate: (page: AppPage) => void;
   t: TranslationDict;
 }
 
-export function Header({ lang, onLangChange, theme, onToggleTheme, t }: HeaderProps) {
+export function Header({
+  lang,
+  onLangChange,
+  theme,
+  onToggleTheme,
+  activePage,
+  onNavigate,
+  t,
+}: HeaderProps) {
   const [logoError, setLogoError] = useState(false);
+
+  const navItems: Array<{ page: AppPage; href: string; label: string }> = [
+    { page: 'files', href: '#files', label: t.navConverter },
+    { page: 'standards', href: '#standards', label: t.navStandards },
+    { page: 'privacy', href: '#privacy', label: t.navPrivacy },
+  ];
 
   return (
     <header className="bg-white dark:bg-[#18191d] border-b border-[#e2e5ec] dark:border-[#262930] transition-colors">
       <div className="max-w-[1360px] mx-auto px-5 sm:px-8 h-14 flex items-center justify-between gap-4 sm:gap-8">
         <a
-          href="#converter"
+          href="#files"
+          onClick={(e) => {
+            e.preventDefault();
+            onNavigate('files');
+          }}
           className="inline-flex items-center gap-2.5 font-display text-base sm:text-lg font-bold tracking-tight text-[#14171c] dark:text-white whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] rounded"
         >
           {!logoError ? (
@@ -56,25 +76,28 @@ export function Header({ lang, onLangChange, theme, onToggleTheme, t }: HeaderPr
           <span>{t.brandName}</span>
         </a>
 
-        <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-[#525b6c] dark:text-[#a3aab8]">
-          <a
-            href="#converter"
-            className="hover:text-[#14171c] dark:hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] rounded"
-          >
-            {t.navConverter}
-          </a>
-          <a
-            href="#standards"
-            className="hover:text-[#14171c] dark:hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] rounded"
-          >
-            {t.navStandards}
-          </a>
-          <a
-            href="#privacy"
-            className="hover:text-[#14171c] dark:hover:text-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] rounded"
-          >
-            {t.navPrivacy}
-          </a>
+        <nav className="hidden sm:flex items-center gap-7 text-sm font-medium">
+          {navItems.map((item) => {
+            const isActive = activePage === item.page;
+            return (
+              <a
+                key={item.page}
+                href={item.href}
+                aria-current={isActive ? 'page' : undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigate(item.page);
+                }}
+                className={`transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2285ee] rounded py-1 ${
+                  isActive
+                    ? 'text-[#14171c] dark:text-white font-semibold underline underline-offset-8 decoration-2 decoration-[#2285ee]'
+                    : 'text-[#525b6c] dark:text-[#a3aab8] hover:text-[#14171c] dark:hover:text-white'
+                }`}
+              >
+                {item.label}
+              </a>
+            );
+          })}
         </nav>
 
         <div className="flex items-center gap-2.5 shrink-0">
@@ -91,7 +114,7 @@ export function Header({ lang, onLangChange, theme, onToggleTheme, t }: HeaderPr
             ) : (
               <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
             )}
-            <span className="hidden sm:inline">
+            <span className="hidden md:inline">
               {theme === 'light' ? t.darkThemeLabel : t.lightThemeLabel}
             </span>
           </button>
