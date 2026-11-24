@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "DocGate PDF",
+  "description": "Bilingual (UA/EN) local browser PDF splitter, optimizer, and compliance converter for banking and customs documents.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
