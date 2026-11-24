@@ -223,7 +223,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: 'Локальна обробка',
-        desc: 'Рендеринг PDF (PDF.js), Word (DOC/DOCX) і Excel (Excel → PDF → JPEG → PDF) виконується виключно у браузері.',
+        desc: 'Рендеринг PDF (PDF.js), Word (DOC/DOCX → PDF → JPEG → PDF) і Excel (Excel → PDF → JPEG → PDF) виконується виключно у браузері.',
       },
       {
         title: 'Без завантаження на сервер',
@@ -358,7 +358,7 @@ export const translations: Record<Language, TranslationDict> = {
     privacyPoints: [
       {
         title: 'Local Browser Execution',
-        desc: 'PDF rendering (PDF.js), Word (DOC/DOCX), and Excel (Excel → PDF → JPEG → PDF) run strictly inside browser memory.',
+        desc: 'PDF rendering (PDF.js), Word (DOC/DOCX → PDF → JPEG → PDF), and Excel (Excel → PDF → JPEG → PDF) run strictly inside browser memory.',
       },
       {
         title: 'Zero Server Uploads',

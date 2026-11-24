@@ -1,10 +1,25 @@
 import * as CFB from 'cfb';
-import { renderAsync } from 'docx-preview';
-import html2canvas from 'html2canvas';
+import JSZip from 'jszip';
+import * as pdfMakeModule from 'pdfmake/build/pdfmake';
+import * as pdfFontsModule from 'pdfmake/build/vfs_fonts';
+import type { Content, TDocumentDefinitions, TableCell } from 'pdfmake/interfaces';
 
-const A4_WIDTH_PX = 794; // 210mm at 96 DPI
-const A4_HEIGHT_PX = 1123; // 297mm at 96 DPI
-const A4_RATIO = 841.89 / 595.28; // ~1.41427
+const pdfMake: any = (pdfMakeModule as any).default ?? pdfMakeModule;
+const rawVfs: any =
+  (pdfFontsModule as any).default ??
+  (pdfFontsModule as any).pdfMake?.vfs ??
+  pdfFontsModule;
+
+let vfsInitialized = false;
+function ensurePdfMakeFonts(): void {
+  if (vfsInitialized) return;
+  if (typeof pdfMake.addVirtualFileSystem === 'function' && rawVfs) {
+    pdfMake.addVirtualFileSystem(rawVfs);
+  } else if (rawVfs) {
+    pdfMake.vfs = rawVfs;
+  }
+  vfsInitialized = true;
+}
 
 type DetectedFormat = 'docx' | 'doc_ole2' | 'rtf' | 'html';
 
@@ -17,11 +32,9 @@ function startsWithBytes(bytes: Uint8Array, prefix: number[]): boolean {
 }
 
 function detectWordFormat(bytes: Uint8Array, fileName: string): DetectedFormat {
-  // PK\x03\x04 -> ZIP / OOXML (.docx)
   if (startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04])) {
     return 'docx';
   }
-  // D0 CF 11 E0 A1 B1 1A E1 -> OLE2 Compound File (.doc)
   if (startsWithBytes(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) {
     return 'doc_ole2';
   }
@@ -46,15 +59,1873 @@ function detectWordFormat(bytes: Uint8Array, fileName: string): DetectedFormat {
   return /\.docx$/i.test(fileName) ? 'docx' : 'doc_ole2';
 }
 
+/* -------------------------------------------------------------------------- */
+/* XML & OOXML Helpers                                                        */
+/* -------------------------------------------------------------------------- */
+
+function parseXmlString(xml: string): Document {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, 'application/xml');
+  return doc;
+}
+
+function localNameOf(node: Node): string {
+  const el = node as Element;
+  if (el.localName) return el.localName;
+  const name = el.nodeName || '';
+  const colonIdx = name.indexOf(':');
+  return colonIdx >= 0 ? name.slice(colonIdx + 1) : name;
+}
+
+function directChildren(parent: Element | null | undefined, name?: string): Element[] {
+  if (!parent) return [];
+  const res: Element[] = [];
+  const nodes = parent.childNodes;
+  for (let i = 0; i < nodes.length; i++) {
+    const child = nodes[i];
+    if (child.nodeType === 1) {
+      if (!name || localNameOf(child) === name) {
+        res.push(child as Element);
+      }
+    }
+  }
+  return res;
+}
+
+function firstChild(parent: Element | null | undefined, name: string): Element | null {
+  if (!parent) return null;
+  const nodes = parent.childNodes;
+  for (let i = 0; i < nodes.length; i++) {
+    const child = nodes[i];
+    if (child.nodeType === 1 && localNameOf(child) === name) {
+      return child as Element;
+    }
+  }
+  return null;
+}
+
+function findDescendants(root: Element | null | undefined, name: string): Element[] {
+  const res: Element[] = [];
+  if (!root) return res;
+  const walk = (node: Element) => {
+    const nodes = node.childNodes;
+    for (let i = 0; i < nodes.length; i++) {
+      const child = nodes[i];
+      if (child.nodeType === 1) {
+        const el = child as Element;
+        // Skip AlternateContent Fallback branch when Choice is present
+        if (localNameOf(el) === 'AlternateContent') {
+          const choice = firstChild(el, 'Choice') ?? firstChild(el, 'Fallback');
+          if (choice) walk(choice);
+          continue;
+        }
+        if (localNameOf(el) === name) {
+          res.push(el);
+        }
+        walk(el);
+      }
+    }
+  };
+  walk(root);
+  return res;
+}
+
+function getAttr(el: Element | null | undefined, name: string): string | null {
+  if (!el) return null;
+  const attrs = el.attributes;
+  if (!attrs) return null;
+  for (let i = 0; i < attrs.length; i++) {
+    const a = attrs[i];
+    const aLocal = a.localName || (a.name.includes(':') ? a.name.split(':').pop()! : a.name);
+    if (aLocal === name) {
+      return a.value;
+    }
+  }
+  return null;
+}
+
+function twipsToPt(val: string | null | undefined, fallback = 0): number {
+  if (!val) return fallback;
+  const num = Number(val);
+  return Number.isFinite(num) ? num / 20 : fallback;
+}
+
+function halfPtToPt(val: string | null | undefined): number | undefined {
+  if (!val) return undefined;
+  const num = Number(val);
+  return Number.isFinite(num) && num > 0 ? num / 2 : undefined;
+}
+
+function emuToPt(val: string | null | undefined): number | undefined {
+  if (!val) return undefined;
+  const num = Number(val);
+  return Number.isFinite(num) && num > 0 ? num / 12700 : undefined;
+}
+
+function normalizeHexColor(val: string | null | undefined): string | undefined {
+  if (!val) return undefined;
+  const clean = val.replace(/^#/, '').trim();
+  if (!clean || clean.toLowerCase() === 'auto') return undefined;
+  if (/^[0-9a-fA-F]{6}$/.test(clean)) return `#${clean.toLowerCase()}`;
+  if (/^[0-9a-fA-F]{8}$/.test(clean)) return `#${clean.slice(2).toLowerCase()}`;
+  return undefined;
+}
+
+function isToggleEnabled(el: Element | null): boolean | undefined {
+  if (!el) return undefined;
+  const val = getAttr(el, 'val');
+  if (val === null) return true;
+  const lower = val.toLowerCase();
+  return lower !== '0' && lower !== 'false' && lower !== 'off';
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    chunks.push(String.fromCharCode(...sub));
+  }
+  return btoa(chunks.join(''));
+}
+
+/* -------------------------------------------------------------------------- */
+/* OOXML Styles, Relationships & Media Resolution                             */
+/* -------------------------------------------------------------------------- */
+
+interface RunStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  fontSize?: number;
+  color?: string;
+  highlight?: string;
+}
+
+interface ParagraphStyle {
+  alignment?: 'left' | 'center' | 'right' | 'justify';
+  spaceBefore?: number;
+  spaceAfter?: number;
+  lineHeight?: number;
+  indentLeft?: number;
+  indentRight?: number;
+  firstLineIndent?: number;
+  fillColor?: string;
+  bottomBorder?: { width: number; color: string } | null;
+  keepNext?: boolean;
+  pageBreakBefore?: boolean;
+  numId?: string;
+  ilvl?: number;
+  tabs?: Array<{ val: string; posPt: number }>;
+  runStyle?: RunStyle;
+}
+
+interface BorderSpec {
+  enabled: boolean;
+  width: number;
+  color: string;
+}
+
+interface TableBorderSet {
+  top?: BorderSpec;
+  bottom?: BorderSpec;
+  left?: BorderSpec;
+  right?: BorderSpec;
+  insideH?: BorderSpec;
+  insideV?: BorderSpec;
+}
+
+interface DocStyleEntry {
+  styleId: string;
+  type: string;
+  basedOn?: string;
+  pPr?: ParagraphStyle;
+  rPr?: RunStyle;
+  tblBorders?: TableBorderSet;
+  tblCellMar?: [number, number, number, number]; // [left, top, right, bottom]
+}
+
+interface StylesContext {
+  defaultRun: RunStyle;
+  defaultParagraph: ParagraphStyle;
+  styles: Map<string, DocStyleEntry>;
+}
+
+interface NumberingLevel {
+  format: string;
+  lvlText: string;
+}
+
+type NumberingMap = Map<string, Map<number, NumberingLevel>>;
+
+interface RelEntry {
+  target: string;
+  type: string;
+}
+
+function parseRunStyle(rPr: Element | null | undefined): RunStyle {
+  if (!rPr) return {};
+  const style: RunStyle = {};
+  const b = isToggleEnabled(firstChild(rPr, 'b'));
+  if (b !== undefined) style.bold = b;
+
+  const i = isToggleEnabled(firstChild(rPr, 'i'));
+  if (i !== undefined) style.italic = i;
+
+  const uEl = firstChild(rPr, 'u');
+  if (uEl) {
+    const uVal = getAttr(uEl, 'val');
+    style.underline = uVal !== 'none';
+  }
+
+  const strike = isToggleEnabled(firstChild(rPr, 'strike'));
+  if (strike !== undefined) style.strike = strike;
+
+  const szEl = firstChild(rPr, 'sz');
+  const szPt = halfPtToPt(getAttr(szEl, 'val'));
+  if (szPt) style.fontSize = szPt;
+
+  const colorEl = firstChild(rPr, 'color');
+  const color = normalizeHexColor(getAttr(colorEl, 'val'));
+  if (color) style.color = color;
+
+  const shdEl = firstChild(rPr, 'shd');
+  const fill = normalizeHexColor(getAttr(shdEl, 'fill'));
+  if (fill && fill !== '#ffffff') style.highlight = fill;
+
+  return style;
+}
+
+function parseBorderElement(el: Element | null | undefined): BorderSpec | undefined {
+  if (!el) return undefined;
+  const val = (getAttr(el, 'val') ?? '').toLowerCase();
+  if (val === 'none' || val === 'nil') {
+    return { enabled: false, width: 0, color: '#0f172a' };
+  }
+  if (!val && !getAttr(el, 'sz') && !getAttr(el, 'color')) {
+    return undefined;
+  }
+  const szEighths = Number(getAttr(el, 'sz') ?? '4');
+  const width = Number.isFinite(szEighths) && szEighths > 0 ? Math.max(0.45, Math.min(2.5, szEighths / 8)) : 0.6;
+  const color = normalizeHexColor(getAttr(el, 'color')) ?? '#1e293b';
+  return { enabled: true, width, color };
+}
+
+function parseTableBorders(tblBordersEl: Element | null | undefined): TableBorderSet {
+  if (!tblBordersEl) return {};
+  return {
+    top: parseBorderElement(firstChild(tblBordersEl, 'top')),
+    bottom: parseBorderElement(firstChild(tblBordersEl, 'bottom')),
+    left: parseBorderElement(firstChild(tblBordersEl, 'left')) ?? parseBorderElement(firstChild(tblBordersEl, 'start')),
+    right: parseBorderElement(firstChild(tblBordersEl, 'right')) ?? parseBorderElement(firstChild(tblBordersEl, 'end')),
+    insideH: parseBorderElement(firstChild(tblBordersEl, 'insideH')),
+    insideV: parseBorderElement(firstChild(tblBordersEl, 'insideV')),
+  };
+}
+
+function parseCellMargins(marEl: Element | null | undefined): [number, number, number, number] | undefined {
+  if (!marEl) return undefined;
+  const left = twipsToPt(getAttr(firstChild(marEl, 'left') ?? firstChild(marEl, 'start'), 'w'), -1);
+  const top = twipsToPt(getAttr(firstChild(marEl, 'top'), 'w'), -1);
+  const right = twipsToPt(getAttr(firstChild(marEl, 'right') ?? firstChild(marEl, 'end'), 'w'), -1);
+  const bottom = twipsToPt(getAttr(firstChild(marEl, 'bottom'), 'w'), -1);
+  if (left < 0 && top < 0 && right < 0 && bottom < 0) return undefined;
+  return [
+    left >= 0 ? Math.min(12, Math.max(2, left)) : 4.5,
+    top >= 0 ? Math.min(10, Math.max(1.5, top)) : 3,
+    right >= 0 ? Math.min(12, Math.max(2, right)) : 4.5,
+    bottom >= 0 ? Math.min(10, Math.max(1.5, bottom)) : 3,
+  ];
+}
+
+function parseParagraphStyle(pPr: Element | null | undefined): ParagraphStyle {
+  if (!pPr) return {};
+  const style: ParagraphStyle = {};
+
+  const jcEl = firstChild(pPr, 'jc');
+  const jcVal = (getAttr(jcEl, 'val') ?? '').toLowerCase();
+  if (jcVal === 'center') style.alignment = 'center';
+  else if (jcVal === 'right' || jcVal === 'end') style.alignment = 'right';
+  else if (jcVal === 'both' || jcVal === 'distribute') style.alignment = 'justify';
+  else if (jcVal === 'left' || jcVal === 'start') style.alignment = 'left';
+
+  const spacingEl = firstChild(pPr, 'spacing');
+  if (spacingEl) {
+    const beforeAttr = getAttr(spacingEl, 'before');
+    if (beforeAttr !== null) style.spaceBefore = Math.min(36, Math.max(0, twipsToPt(beforeAttr)));
+
+    const afterAttr = getAttr(spacingEl, 'after');
+    if (afterAttr !== null) style.spaceAfter = Math.min(36, Math.max(0, twipsToPt(afterAttr)));
+
+    const lineAttr = getAttr(spacingEl, 'line');
+    const lineRule = (getAttr(spacingEl, 'lineRule') ?? 'auto').toLowerCase();
+    if (lineAttr !== null) {
+      const lineNum = Number(lineAttr);
+      if (Number.isFinite(lineNum) && lineNum > 0) {
+        if (lineRule === 'auto') {
+          style.lineHeight = Math.min(1.65, Math.max(1.08, lineNum / 240));
+        } else {
+          // Exact / atLeast in twips (approximate ratio assuming ~11pt base)
+          const pt = lineNum / 20;
+          style.lineHeight = Math.min(1.65, Math.max(1.08, pt / 11));
+        }
+      }
+    }
+  }
+
+  const indEl = firstChild(pPr, 'ind');
+  if (indEl) {
+    const leftVal = getAttr(indEl, 'left') ?? getAttr(indEl, 'start');
+    if (leftVal !== null) style.indentLeft = Math.max(0, Math.min(220, twipsToPt(leftVal)));
+
+    const rightVal = getAttr(indEl, 'right') ?? getAttr(indEl, 'end');
+    if (rightVal !== null) style.indentRight = Math.max(0, Math.min(220, twipsToPt(rightVal)));
+
+    const firstLineVal = getAttr(indEl, 'firstLine');
+    if (firstLineVal !== null) {
+      style.firstLineIndent = Math.max(0, Math.min(120, twipsToPt(firstLineVal)));
+    }
+  }
+
+  const shdEl = firstChild(pPr, 'shd');
+  const fill = normalizeHexColor(getAttr(shdEl, 'fill'));
+  if (fill && fill !== '#ffffff') style.fillColor = fill;
+
+  const pBdrEl = firstChild(pPr, 'pBdr');
+  if (pBdrEl) {
+    const bottomBdr = parseBorderElement(firstChild(pBdrEl, 'bottom'));
+    if (bottomBdr?.enabled) {
+      style.bottomBorder = { width: bottomBdr.width, color: bottomBdr.color };
+    }
+  }
+
+  if (firstChild(pPr, 'pageBreakBefore')) {
+    style.pageBreakBefore = true;
+  }
+
+  const numPrEl = firstChild(pPr, 'numPr');
+  if (numPrEl) {
+    const numIdVal = getAttr(firstChild(numPrEl, 'numId'), 'val');
+    const ilvlVal = getAttr(firstChild(numPrEl, 'ilvl'), 'val');
+    if (numIdVal && numIdVal !== '0') {
+      style.numId = numIdVal;
+      style.ilvl = ilvlVal ? Number(ilvlVal) || 0 : 0;
+    }
+  }
+
+  const tabsEl = firstChild(pPr, 'tabs');
+  if (tabsEl) {
+    const tabs: Array<{ val: string; posPt: number }> = [];
+    for (const tab of directChildren(tabsEl, 'tab')) {
+      const val = (getAttr(tab, 'val') ?? 'left').toLowerCase();
+      if (val === 'clear') continue;
+      const posPt = twipsToPt(getAttr(tab, 'pos'), 0);
+      tabs.push({ val, posPt });
+    }
+    if (tabs.length > 0) {
+      style.tabs = tabs;
+    }
+  }
+
+  const rPrEl = firstChild(pPr, 'rPr');
+  if (rPrEl) {
+    style.runStyle = parseRunStyle(rPrEl);
+  }
+
+  return style;
+}
+
+function mergeRunStyle(base: RunStyle, over?: RunStyle): RunStyle {
+  if (!over) return { ...base };
+  return {
+    bold: over.bold !== undefined ? over.bold : base.bold,
+    italic: over.italic !== undefined ? over.italic : base.italic,
+    underline: over.underline !== undefined ? over.underline : base.underline,
+    strike: over.strike !== undefined ? over.strike : base.strike,
+    fontSize: over.fontSize !== undefined ? over.fontSize : base.fontSize,
+    color: over.color !== undefined ? over.color : base.color,
+    highlight: over.highlight !== undefined ? over.highlight : base.highlight,
+  };
+}
+
+function mergeParagraphStyle(base: ParagraphStyle, over?: ParagraphStyle): ParagraphStyle {
+  if (!over) return { ...base, runStyle: base.runStyle ? { ...base.runStyle } : undefined };
+  return {
+    alignment: over.alignment ?? base.alignment,
+    spaceBefore: over.spaceBefore !== undefined ? over.spaceBefore : base.spaceBefore,
+    spaceAfter: over.spaceAfter !== undefined ? over.spaceAfter : base.spaceAfter,
+    lineHeight: over.lineHeight !== undefined ? over.lineHeight : base.lineHeight,
+    indentLeft: over.indentLeft !== undefined ? over.indentLeft : base.indentLeft,
+    indentRight: over.indentRight !== undefined ? over.indentRight : base.indentRight,
+    firstLineIndent:
+      over.firstLineIndent !== undefined ? over.firstLineIndent : base.firstLineIndent,
+    fillColor: over.fillColor ?? base.fillColor,
+    bottomBorder: over.bottomBorder !== undefined ? over.bottomBorder : base.bottomBorder,
+    pageBreakBefore: over.pageBreakBefore ?? base.pageBreakBefore,
+    numId: over.numId ?? base.numId,
+    ilvl: over.ilvl !== undefined ? over.ilvl : base.ilvl,
+    tabs: over.tabs ?? base.tabs,
+    runStyle: mergeRunStyle(base.runStyle ?? {}, over.runStyle),
+  };
+}
+
+async function parseStylesXml(zip: JSZip): Promise<StylesContext> {
+  const ctx: StylesContext = {
+    defaultRun: { fontSize: 10.5, color: '#0f172a' },
+    defaultParagraph: { alignment: 'left', spaceBefore: 0, spaceAfter: 4, lineHeight: 1.16 },
+    styles: new Map(),
+  };
+
+  const stylesFile = zip.file('word/styles.xml');
+  if (!stylesFile) return ctx;
+
+  const doc = parseXmlString(await stylesFile.async('string'));
+  const root = doc.documentElement;
+  if (!root) return ctx;
+
+  const docDefaults = firstChild(root, 'docDefaults');
+  if (docDefaults) {
+    const rPrDef = firstChild(firstChild(docDefaults, 'rPrDefault'), 'rPr');
+    if (rPrDef) {
+      ctx.defaultRun = mergeRunStyle(ctx.defaultRun, parseRunStyle(rPrDef));
+    }
+    const pPrDef = firstChild(firstChild(docDefaults, 'pPrDefault'), 'pPr');
+    if (pPrDef) {
+      ctx.defaultParagraph = mergeParagraphStyle(ctx.defaultParagraph, parseParagraphStyle(pPrDef));
+    }
+  }
+
+  for (const st of directChildren(root, 'style')) {
+    const styleId = getAttr(st, 'styleId');
+    if (!styleId) continue;
+    const type = getAttr(st, 'type') ?? 'paragraph';
+    const basedOn = getAttr(firstChild(st, 'basedOn'), 'val') ?? undefined;
+    const pPr = parseParagraphStyle(firstChild(st, 'pPr'));
+    const rPr = parseRunStyle(firstChild(st, 'rPr'));
+    const tblPr = firstChild(st, 'tblPr');
+    const tblBorders = tblPr ? parseTableBorders(firstChild(tblPr, 'tblBorders')) : undefined;
+    const tblCellMar = tblPr ? parseCellMargins(firstChild(tblPr, 'tblCellMar')) : undefined;
+
+    ctx.styles.set(styleId, {
+      styleId,
+      type,
+      basedOn,
+      pPr,
+      rPr,
+      tblBorders,
+      tblCellMar,
+    });
+  }
+
+  return ctx;
+}
+
+function resolveParagraphStyleChain(ctx: StylesContext, styleId?: string | null): ParagraphStyle {
+  let acc: ParagraphStyle = mergeParagraphStyle(ctx.defaultParagraph, { runStyle: ctx.defaultRun });
+  if (!styleId) return acc;
+
+  const chain: DocStyleEntry[] = [];
+  const visited = new Set<string>();
+  let currId: string | undefined = styleId;
+  while (currId && !visited.has(currId)) {
+    visited.add(currId);
+    const entry = ctx.styles.get(currId);
+    if (!entry) break;
+    chain.unshift(entry);
+    currId = entry.basedOn;
+  }
+
+  for (const item of chain) {
+    if (item.pPr) acc = mergeParagraphStyle(acc, item.pPr);
+    if (item.rPr) acc.runStyle = mergeRunStyle(acc.runStyle ?? {}, item.rPr);
+  }
+  return acc;
+}
+
+function resolveRunStyleChain(ctx: StylesContext, styleId?: string | null): RunStyle {
+  if (!styleId) return {};
+  const chain: DocStyleEntry[] = [];
+  const visited = new Set<string>();
+  let currId: string | undefined = styleId;
+  while (currId && !visited.has(currId)) {
+    visited.add(currId);
+    const entry = ctx.styles.get(currId);
+    if (!entry) break;
+    chain.unshift(entry);
+    currId = entry.basedOn;
+  }
+
+  let acc: RunStyle = {};
+  for (const item of chain) {
+    if (item.rPr) acc = mergeRunStyle(acc, item.rPr);
+  }
+  return acc;
+}
+
+function resolveTableStyleChain(
+  ctx: StylesContext,
+  styleId?: string | null,
+): { tblBorders?: TableBorderSet; tblCellMar?: [number, number, number, number] } {
+  if (!styleId) return {};
+  const chain: DocStyleEntry[] = [];
+  const visited = new Set<string>();
+  let currId: string | undefined = styleId;
+  while (currId && !visited.has(currId)) {
+    visited.add(currId);
+    const entry = ctx.styles.get(currId);
+    if (!entry) break;
+    chain.unshift(entry);
+    currId = entry.basedOn;
+  }
+
+  let tblBorders: TableBorderSet = {};
+  let tblCellMar: [number, number, number, number] | undefined;
+  for (const item of chain) {
+    if (item.tblBorders) tblBorders = { ...tblBorders, ...item.tblBorders };
+    if (item.tblCellMar) tblCellMar = item.tblCellMar;
+  }
+  return { tblBorders, tblCellMar };
+}
+
+async function parseNumberingXml(zip: JSZip): Promise<NumberingMap> {
+  const numMap: NumberingMap = new Map();
+  const file = zip.file('word/numbering.xml');
+  if (!file) return numMap;
+
+  const doc = parseXmlString(await file.async('string'));
+  const root = doc.documentElement;
+  if (!root) return numMap;
+
+  const abstractMap = new Map<string, Map<number, NumberingLevel>>();
+  for (const abs of directChildren(root, 'abstractNum')) {
+    const absId = getAttr(abs, 'abstractNumId');
+    if (!absId) continue;
+    const lvls = new Map<number, NumberingLevel>();
+    for (const lvl of directChildren(abs, 'lvl')) {
+      const ilvl = Number(getAttr(lvl, 'ilvl') ?? '0') || 0;
+      const format = getAttr(firstChild(lvl, 'numFmt'), 'val') ?? 'decimal';
+      const lvlText = getAttr(firstChild(lvl, 'lvlText'), 'val') ?? '%1.';
+      lvls.set(ilvl, { format, lvlText });
+    }
+    abstractMap.set(absId, lvls);
+  }
+
+  for (const num of directChildren(root, 'num')) {
+    const numId = getAttr(num, 'numId');
+    const absId = getAttr(firstChild(num, 'abstractNumId'), 'val');
+    if (numId && absId && abstractMap.has(absId)) {
+      numMap.set(numId, abstractMap.get(absId)!);
+    }
+  }
+
+  return numMap;
+}
+
+async function parseRelsFile(zip: JSZip, relsPath: string): Promise<Map<string, RelEntry>> {
+  const map = new Map<string, RelEntry>();
+  const file = zip.file(relsPath);
+  if (!file) return map;
+
+  const doc = parseXmlString(await file.async('string'));
+  const root = doc.documentElement;
+  if (!root) return map;
+
+  for (const rel of directChildren(root, 'Relationship')) {
+    const id = getAttr(rel, 'Id');
+    const target = getAttr(rel, 'Target');
+    const type = getAttr(rel, 'Type') ?? '';
+    if (id && target) {
+      map.set(id, { target, type });
+    }
+  }
+  return map;
+}
+
+function resolveZipTarget(basePartDir: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = basePartDir ? basePartDir.split('/').filter(Boolean) : [];
+  for (const seg of target.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return parts.join('/');
+}
+
+async function rasterizeImageToPngDataUri(dataUri: string): Promise<string | null> {
+  if (typeof document === 'undefined' || typeof Image === 'undefined') return null;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          resolve(null);
+          return;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUri;
+  });
+}
+
+async function loadImageAsPdfMakeDataUri(
+  zip: JSZip,
+  zipPath: string,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  if (cache.has(zipPath)) return cache.get(zipPath) ?? null;
+
+  const entry = zip.file(zipPath);
+  if (!entry) {
+    cache.set(zipPath, null);
+    return null;
+  }
+
+  const ext = zipPath.split('.').pop()?.toLowerCase() ?? '';
+  const bytes = await entry.async('uint8array');
+  const base64 = uint8ToBase64(bytes);
+
+  if (ext === 'png') {
+    const uri = `data:image/png;base64,${base64}`;
+    cache.set(zipPath, uri);
+    return uri;
+  }
+  if (ext === 'jpg' || ext === 'jpeg') {
+    const uri = `data:image/jpeg;base64,${base64}`;
+    cache.set(zipPath, uri);
+    return uri;
+  }
+
+  const mimeMap: Record<string, string> = {
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    svg: 'image/svg+xml',
+  };
+  const mime = mimeMap[ext];
+  if (mime) {
+    const pngUri = await rasterizeImageToPngDataUri(`data:${mime};base64,${base64}`);
+    cache.set(zipPath, pngUri);
+    return pngUri;
+  }
+
+  cache.set(zipPath, null);
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* OOXML Paragraph, Image & Table Builders                                    */
+/* -------------------------------------------------------------------------- */
+
+interface RunToken {
+  kind: 'text' | 'tab' | 'pageBreak' | 'image';
+  text?: string;
+  style?: RunStyle;
+  imageUri?: string;
+  widthPt?: number;
+  heightPt?: number;
+}
+
+interface ParsedParagraphResult {
+  content: Content | null;
+  estimatedHeightPt: number;
+  hasPageBreak: boolean;
+}
+
+interface BuildContext {
+  zip: JSZip;
+  styles: StylesContext;
+  numbering: NumberingMap;
+  numCounters: Map<string, number>;
+  imageCache: Map<string, string | null>;
+}
+
+function parseVmlDimensionPt(styleStr: string | null, prop: 'width' | 'height'): number | undefined {
+  if (!styleStr) return undefined;
+  const regex = new RegExp(`${prop}\\s*:\\s*([0-9.]+)(pt|px|in|cm|mm)?`, 'i');
+  const m = styleStr.match(regex);
+  if (!m) return undefined;
+  const val = Number(m[1]);
+  if (!Number.isFinite(val) || val <= 0) return undefined;
+  const unit = (m[2] ?? 'pt').toLowerCase();
+  if (unit === 'pt') return val;
+  if (unit === 'px') return val * 0.75;
+  if (unit === 'in') return val * 72;
+  if (unit === 'cm') return val * 28.3465;
+  if (unit === 'mm') return val * 2.83465;
+  return val;
+}
+
+async function extractRunTokens(
+  pEl: Element,
+  baseRunStyle: RunStyle,
+  rels: Map<string, RelEntry>,
+  partDir: string,
+  bctx: BuildContext,
+): Promise<RunToken[]> {
+  const tokens: RunToken[] = [];
+
+  const processRun = async (rEl: Element, linkOverride?: RunStyle) => {
+    const rPr = firstChild(rEl, 'rPr');
+    const charStyleId = getAttr(firstChild(rPr, 'rStyle'), 'val');
+    const charStyle = resolveRunStyleChain(bctx.styles, charStyleId);
+    const directStyle = parseRunStyle(rPr);
+    const finalStyle = mergeRunStyle(
+      mergeRunStyle(mergeRunStyle(baseRunStyle, charStyle), linkOverride),
+      directStyle,
+    );
+
+    const children = directChildren(rEl);
+    for (const child of children) {
+      const tag = localNameOf(child);
+      if (tag === 't' || tag === 'delText') {
+        const txt = child.textContent ?? '';
+        if (txt.length > 0) {
+          tokens.push({ kind: 'text', text: txt, style: finalStyle });
+        }
+      } else if (tag === 'tab') {
+        tokens.push({ kind: 'tab', style: finalStyle });
+      } else if (tag === 'br') {
+        const brType = (getAttr(child, 'type') ?? '').toLowerCase();
+        if (brType === 'page') {
+          tokens.push({ kind: 'pageBreak' });
+        } else {
+          tokens.push({ kind: 'text', text: '\n', style: finalStyle });
+        }
+      } else if (tag === 'cr') {
+        tokens.push({ kind: 'text', text: '\n', style: finalStyle });
+      } else if (tag === 'noBreakHyphen') {
+        tokens.push({ kind: 'text', text: '-', style: finalStyle });
+      } else if (tag === 'drawing') {
+        const blips = findDescendants(child, 'blip');
+        const extents = findDescendants(child, 'extent');
+        const ext = extents[0];
+        const wPt = emuToPt(getAttr(ext, 'cx')) ?? 140;
+        const hPt = emuToPt(getAttr(ext, 'cy')) ?? 60;
+
+        for (const blip of blips) {
+          const rId = getAttr(blip, 'embed') ?? getAttr(blip, 'link');
+          if (!rId) continue;
+          const rel = rels.get(rId);
+          if (!rel) continue;
+          const imgPath = resolveZipTarget(partDir, rel.target);
+          const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
+          if (dataUri) {
+            tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
+          }
+        }
+      } else if (tag === 'pict') {
+        const imagedatas = findDescendants(child, 'imagedata');
+        const shape = firstChild(child, 'shape') ?? child;
+        const shapeStyle = getAttr(shape, 'style');
+        const wPt = parseVmlDimensionPt(shapeStyle, 'width') ?? 140;
+        const hPt = parseVmlDimensionPt(shapeStyle, 'height') ?? 60;
+
+        for (const im of imagedatas) {
+          const rId = getAttr(im, 'id');
+          if (!rId) continue;
+          const rel = rels.get(rId);
+          if (!rel) continue;
+          const imgPath = resolveZipTarget(partDir, rel.target);
+          const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
+          if (dataUri) {
+            tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
+          }
+        }
+      } else if (tag === 'AlternateContent') {
+        const choice = firstChild(child, 'Choice') ?? firstChild(child, 'Fallback');
+        if (choice) {
+          for (const subDrawing of findDescendants(choice, 'drawing')) {
+            const blips = findDescendants(subDrawing, 'blip');
+            const ext = findDescendants(subDrawing, 'extent')[0];
+            const wPt = emuToPt(getAttr(ext, 'cx')) ?? 140;
+            const hPt = emuToPt(getAttr(ext, 'cy')) ?? 60;
+            for (const blip of blips) {
+              const rId = getAttr(blip, 'embed') ?? getAttr(blip, 'link');
+              if (!rId) continue;
+              const rel = rels.get(rId);
+              if (!rel) continue;
+              const imgPath = resolveZipTarget(partDir, rel.target);
+              const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
+              if (dataUri) {
+                tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  for (const node of directChildren(pEl)) {
+    const tag = localNameOf(node);
+    if (tag === 'r') {
+      await processRun(node);
+    } else if (tag === 'hyperlink') {
+      for (const rEl of directChildren(node, 'r')) {
+        await processRun(rEl, { color: '#1d4ed8', underline: true });
+      }
+    } else if (tag === 'fldSimple') {
+      const instr = getAttr(node, 'instr') ?? '';
+      const isPageField = /\bPAGE\b/i.test(instr);
+      const isNumPagesField = /\bNUMPAGES\b/i.test(instr);
+      for (const rEl of directChildren(node, 'r')) {
+        if (isPageField) {
+          tokens.push({ kind: 'text', text: '{{PAGE}}', style: baseRunStyle });
+        } else if (isNumPagesField) {
+          tokens.push({ kind: 'text', text: '{{NUMPAGES}}', style: baseRunStyle });
+        } else {
+          await processRun(rEl);
+        }
+      }
+    } else if (tag === 'sdt') {
+      const sdtContent = firstChild(node, 'sdtContent');
+      if (sdtContent) {
+        for (const rEl of directChildren(sdtContent, 'r')) {
+          await processRun(rEl);
+        }
+      }
+    } else if (tag === 'ins') {
+      for (const rEl of directChildren(node, 'r')) {
+        await processRun(rEl);
+      }
+    }
+  }
+
+  return tokens;
+}
+
+function buildTextSpan(text: string, style?: RunStyle): any {
+  const span: any = { text };
+  if (style?.bold) span.bold = true;
+  if (style?.italic) span.italics = true;
+  if (style?.underline) span.decoration = 'underline';
+  else if (style?.strike) span.decoration = 'lineThrough';
+  if (style?.fontSize) span.fontSize = Number(style.fontSize.toFixed(1));
+  if (style?.color) span.color = style.color;
+  if (style?.highlight) span.background = style.highlight;
+  return span;
+}
+
+function nextListPrefix(pStyle: ParagraphStyle, bctx: BuildContext): string | null {
+  if (!pStyle.numId) return null;
+  const lvl = pStyle.ilvl ?? 0;
+  const levels = bctx.numbering.get(pStyle.numId);
+  const spec = levels?.get(lvl);
+
+  if (!spec || spec.format === 'bullet') {
+    return '•  ';
+  }
+  const key = `${pStyle.numId}:${lvl}`;
+  const count = (bctx.numCounters.get(key) ?? 0) + 1;
+  bctx.numCounters.set(key, count);
+
+  if (spec.format === 'lowerLetter') {
+    const ch = String.fromCharCode(97 + ((count - 1) % 26));
+    return `${ch}) `;
+  }
+  if (spec.format === 'upperLetter') {
+    const ch = String.fromCharCode(65 + ((count - 1) % 26));
+    return `${ch}. `;
+  }
+  return `${count}. `;
+}
+
+async function buildParagraphContent(
+  pEl: Element,
+  maxWidthPt: number,
+  rels: Map<string, RelEntry>,
+  partDir: string,
+  bctx: BuildContext,
+  insideCell: boolean,
+  hasFollowingPageBreak = false,
+): Promise<ParsedParagraphResult> {
+  const pPrEl = firstChild(pEl, 'pPr');
+  const styleId = getAttr(firstChild(pPrEl, 'pStyle'), 'val');
+  const baseStyle = resolveParagraphStyleChain(bctx.styles, styleId);
+  const directP = parseParagraphStyle(pPrEl);
+  const pStyle = mergeParagraphStyle(baseStyle, directP);
+
+  const hasPageBreak = Boolean(pStyle.pageBreakBefore);
+  const tokens = await extractRunTokens(
+    pEl,
+    pStyle.runStyle ?? {},
+    rels,
+    partDir,
+    bctx,
+  );
+
+  let foundInlinePageBreak = false;
+  const cleanTokens: RunToken[] = [];
+  for (const t of tokens) {
+    if (t.kind === 'pageBreak') {
+      foundInlinePageBreak = true;
+    } else {
+      cleanTokens.push(t);
+    }
+  }
+
+  const baseFontSize = pStyle.runStyle?.fontSize ?? 10.5;
+  const lineHeight = pStyle.lineHeight ?? 1.16;
+  const spaceBefore = insideCell ? Math.min(pStyle.spaceBefore ?? 0, 2) : (pStyle.spaceBefore ?? 0);
+  const spaceAfter = insideCell
+    ? Math.min(pStyle.spaceAfter ?? 1, 2.5)
+    : (pStyle.spaceAfter ?? 3);
+
+  const images = cleanTokens.filter((t) => t.kind === 'image');
+  const hasVisibleText = cleanTokens.some(
+    (t) => t.kind === 'text' && (t.text ?? '').replace(/\s+/g, '').length > 0,
+  );
+
+  // Empty spacer paragraph
+  if (!hasVisibleText && images.length === 0) {
+    if (foundInlinePageBreak || hasPageBreak || hasFollowingPageBreak) {
+      return {
+        content: {
+          text: '',
+          fontSize: 1,
+          margin: [0, 0, 0, 0],
+          pageBreak: hasPageBreak ? 'before' : 'after',
+        },
+        estimatedHeightPt: 0,
+        hasPageBreak: true,
+      };
+    }
+    const spacerH = insideCell ? 3 : Math.max(4, Math.min(14, baseFontSize * 0.65));
+    return {
+      content: { text: ' ', fontSize: Math.max(3, Math.round(spacerH * 0.7)), margin: [0, 0, 0, 0] },
+      estimatedHeightPt: spacerH,
+      hasPageBreak: false,
+    };
+  }
+
+  const listPrefix = nextListPrefix(pStyle, bctx);
+  let leftMargin = insideCell ? 0 : (pStyle.indentLeft ?? 0);
+  const rightMargin = insideCell ? 0 : (pStyle.indentRight ?? 0);
+  if (!insideCell && pStyle.numId) {
+    leftMargin += 14 * ((pStyle.ilvl ?? 0) + 1);
+  }
+
+  // Clamp horizontal margins so narrow columns never collapse
+  if (leftMargin + rightMargin > maxWidthPt * 0.55) {
+    leftMargin = Math.min(leftMargin, maxWidthPt * 0.35);
+  }
+
+  const availableW = Math.max(30, maxWidthPt - leftMargin - rightMargin);
+
+  // Pure image paragraph (common for company logos in header or body)
+  if (!hasVisibleText && images.length > 0) {
+    const imgItems: Content[] = images.map((im, idx) => {
+      let w = im.widthPt ?? 120;
+      let h = im.heightPt ?? 60;
+      if (w > availableW) {
+        const scale = availableW / w;
+        w = availableW;
+        h = h * scale;
+      }
+      return {
+        image: im.imageUri!,
+        width: Number(w.toFixed(1)),
+        height: Number(h.toFixed(1)),
+        alignment: pStyle.alignment === 'justify' ? 'left' : (pStyle.alignment ?? 'left'),
+        margin: [
+          leftMargin,
+          idx === 0 ? spaceBefore : 2,
+          rightMargin,
+          idx === images.length - 1 ? spaceAfter : 2,
+        ],
+        ...(hasPageBreak && idx === 0 ? { pageBreak: 'before' as const } : {}),
+      };
+    });
+
+    const totalImgH = imgItems.reduce((sum: number, item: any) => sum + (item.height ?? 40), 0);
+    return {
+      content: imgItems.length === 1 ? imgItems[0] : { stack: imgItems },
+      estimatedHeightPt: totalImgH + spaceBefore + spaceAfter,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    };
+  }
+
+  // Paragraph contains inline image(s) alongside text: emit stack of text + images safely
+  if (images.length > 0) {
+    const stackItems: Content[] = [];
+    let currentSpans: any[] = [];
+    let estH = spaceBefore + spaceAfter;
+
+    const flushSpans = () => {
+      if (currentSpans.length === 0) return;
+      stackItems.push({
+        text: currentSpans,
+        fontSize: Number(baseFontSize.toFixed(1)),
+        lineHeight,
+        alignment: pStyle.alignment ?? 'left',
+        margin: [leftMargin, 0, rightMargin, 2],
+      });
+      estH += baseFontSize * lineHeight * 1.3;
+      currentSpans = [];
+    };
+
+    if (listPrefix) {
+      currentSpans.push(buildTextSpan(listPrefix, pStyle.runStyle));
+    }
+
+    for (const tok of cleanTokens) {
+      if (tok.kind === 'text' && tok.text) {
+        currentSpans.push(buildTextSpan(tok.text, tok.style));
+      } else if (tok.kind === 'tab') {
+        currentSpans.push(buildTextSpan('   ', tok.style));
+      } else if (tok.kind === 'image' && tok.imageUri) {
+        flushSpans();
+        let w = tok.widthPt ?? 120;
+        let h = tok.heightPt ?? 60;
+        if (w > availableW) {
+          const s = availableW / w;
+          w = availableW;
+          h *= s;
+        }
+        stackItems.push({
+          image: tok.imageUri,
+          width: Number(w.toFixed(1)),
+          height: Number(h.toFixed(1)),
+          alignment: pStyle.alignment === 'justify' ? 'left' : (pStyle.alignment ?? 'left'),
+          margin: [leftMargin, 2, rightMargin, 2],
+        });
+        estH += h + 4;
+      }
+    }
+    flushSpans();
+
+    return {
+      content: {
+        stack: stackItems,
+        margin: [0, spaceBefore, 0, spaceAfter],
+        ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+      },
+      estimatedHeightPt: estH,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    };
+  }
+
+  // Split text tokens into tab-separated groups
+  const tabGroups: any[][] = [[]];
+  for (const tok of cleanTokens) {
+    if (tok.kind === 'tab') {
+      tabGroups.push([]);
+    } else if (tok.kind === 'text' && tok.text) {
+      tabGroups[tabGroups.length - 1].push(buildTextSpan(tok.text, tok.style));
+    }
+  }
+
+  const nonEmptyGroupIndices: number[] = [];
+  tabGroups.forEach((grp, idx) => {
+    const txt = grp.map((s) => s.text).join('').trim();
+    if (txt.length > 0) nonEmptyGroupIndices.push(idx);
+  });
+
+  // Handle leading tabs before the first text (e.g. "\tЛист щодо...")
+  if (
+    !insideCell &&
+    tabGroups.length > 1 &&
+    nonEmptyGroupIndices.length === 1 &&
+    nonEmptyGroupIndices[0] > 0
+  ) {
+    const leadingTabsCount = nonEmptyGroupIndices[0];
+    const tabPos = pStyle.tabs?.[leadingTabsCount - 1]?.posPt;
+    const extraIndent = tabPos && tabPos > leftMargin ? Math.min(180, tabPos) : leftMargin + leadingTabsCount * 28;
+    const spans = tabGroups[nonEmptyGroupIndices[0]];
+    if (listPrefix) spans.unshift(buildTextSpan(listPrefix, pStyle.runStyle));
+    const totalChars = spans.map((s) => s.text).join('').length;
+    const estLines = Math.max(1, Math.ceil((totalChars * baseFontSize * 0.52) / Math.max(40, availableW - extraIndent)));
+
+    return {
+      content: {
+        text: spans,
+        fontSize: Number(baseFontSize.toFixed(1)),
+        lineHeight,
+        alignment: pStyle.alignment ?? 'left',
+        margin: [extraIndent, spaceBefore, rightMargin, spaceAfter],
+        ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+      },
+      estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    };
+  }
+
+  // Signature / multi-column tab lines at top level (e.g. "Директор ПП «Будпостач» \t Шитлін Д.В.")
+  if (!insideCell && tabGroups.length >= 2 && nonEmptyGroupIndices.length >= 2) {
+    const activeGroups = tabGroups
+      .filter((grp) => grp.map((s) => s.text).join('').trim().length > 0)
+      .slice(0, 4);
+
+    if (activeGroups.length === 2) {
+      const rightTab = pStyle.tabs?.[pStyle.tabs.length - 1];
+      const rightAlign =
+        rightTab?.val === 'center' ? 'center' : 'right';
+      return {
+        content: {
+          columns: [
+            {
+              width: '*',
+              text: activeGroups[0],
+              fontSize: Number(baseFontSize.toFixed(1)),
+              lineHeight,
+              alignment: 'left',
+            },
+            {
+              width: 'auto',
+              text: activeGroups[1],
+              fontSize: Number(baseFontSize.toFixed(1)),
+              lineHeight,
+              alignment: rightAlign,
+            },
+          ],
+          columnGap: 12,
+          margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+        },
+        estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
+      };
+    }
+
+    if (activeGroups.length >= 3) {
+      return {
+        content: {
+          columns: activeGroups.map((grp, i) => ({
+            width: '*',
+            text: grp,
+            fontSize: Number(baseFontSize.toFixed(1)),
+            lineHeight,
+            alignment: i === activeGroups.length - 1 ? 'right' : 'left',
+          })),
+          columnGap: 8,
+          margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+        },
+        estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
+      };
+    }
+  }
+
+  // Standard paragraph
+  const mergedSpans: any[] = [];
+  if (listPrefix) {
+    mergedSpans.push(buildTextSpan(listPrefix, pStyle.runStyle));
+  }
+  tabGroups.forEach((grp, idx) => {
+    if (idx > 0 && grp.length > 0) {
+      mergedSpans.push(buildTextSpan('   ', pStyle.runStyle));
+    }
+    mergedSpans.push(...grp);
+  });
+
+  const plainText = mergedSpans.map((s) => s.text).join('');
+  const estLines = Math.max(
+    plainText.split('\n').length,
+    Math.ceil((plainText.length * baseFontSize * 0.52) / availableW),
+  );
+
+  const node: any = {
+    text: mergedSpans,
+    fontSize: Number(baseFontSize.toFixed(1)),
+    lineHeight,
+    alignment: pStyle.alignment ?? 'left',
+    margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+  };
+
+  if (!insideCell && pStyle.firstLineIndent && pStyle.firstLineIndent > 0 && !pStyle.numId) {
+    node.leadingIndent = Number(pStyle.firstLineIndent.toFixed(1));
+  }
+  if (hasPageBreak) {
+    node.pageBreak = 'before';
+  }
+  if (foundInlinePageBreak || hasFollowingPageBreak) {
+    node.pageBreak = 'after';
+  }
+
+  if (pStyle.bottomBorder) {
+    return {
+      content: {
+        stack: [
+          node,
+          {
+            canvas: [
+              {
+                type: 'line',
+                x1: leftMargin,
+                y1: 0,
+                x2: maxWidthPt - rightMargin,
+                y2: 0,
+                lineWidth: pStyle.bottomBorder.width,
+                lineColor: pStyle.bottomBorder.color,
+              },
+            ],
+            margin: [0, 1, 0, Math.max(2, spaceAfter)],
+          },
+        ],
+      },
+      estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter + 4,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    };
+  }
+
+  return {
+    content: node,
+    estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
+    hasPageBreak: hasPageBreak || foundInlinePageBreak,
+  };
+}
+
+interface TableCellData {
+  isCovered: boolean;
+  colSpan: number;
+  rowSpan: number;
+  stackContent: Content[];
+  fillColor?: string;
+  borders: [boolean, boolean, boolean, boolean]; // [left, top, right, bottom]
+  borderColors: [string, string, string, string];
+  borderWidths: [number, number, number, number];
+}
+
+function resolveEffectiveBorder(
+  cellSpec: BorderSpec | undefined,
+  tableEdgeSpec: BorderSpec | undefined,
+  tableInsideSpec: BorderSpec | undefined,
+  isEdge: boolean,
+): BorderSpec {
+  if (cellSpec !== undefined) return cellSpec;
+  if (isEdge && tableEdgeSpec !== undefined) return tableEdgeSpec;
+  if (!isEdge && tableInsideSpec !== undefined) return tableInsideSpec;
+  if (tableEdgeSpec !== undefined) return tableEdgeSpec;
+  return { enabled: false, width: 0, color: '#1e293b' };
+}
+
+async function buildTableContent(
+  tblEl: Element,
+  maxWidthPt: number,
+  rels: Map<string, RelEntry>,
+  partDir: string,
+  bctx: BuildContext,
+): Promise<{ content: Content; estimatedHeightPt: number }> {
+  const tblPr = firstChild(tblEl, 'tblPr');
+  const tblStyleId = getAttr(firstChild(tblPr, 'tblStyle'), 'val');
+  const styleResolved = resolveTableStyleChain(bctx.styles, tblStyleId);
+
+  const directBorders = parseTableBorders(firstChild(tblPr, 'tblBorders'));
+  const tblBorders: TableBorderSet = {
+    top: directBorders.top ?? styleResolved.tblBorders?.top,
+    bottom: directBorders.bottom ?? styleResolved.tblBorders?.bottom,
+    left: directBorders.left ?? styleResolved.tblBorders?.left,
+    right: directBorders.right ?? styleResolved.tblBorders?.right,
+    insideH: directBorders.insideH ?? styleResolved.tblBorders?.insideH,
+    insideV: directBorders.insideV ?? styleResolved.tblBorders?.insideV,
+  };
+
+  const cellMar =
+    parseCellMargins(firstChild(tblPr, 'tblCellMar')) ??
+    styleResolved.tblCellMar ?? [4.5, 3, 4.5, 3];
+
+  const [padLeft, padTop, padRight, padBottom] = cellMar;
+
+  // Determine raw column widths from tblGrid
+  const tblGrid = firstChild(tblEl, 'tblGrid');
+  const rawColPts: number[] = [];
+  if (tblGrid) {
+    for (const gc of directChildren(tblGrid, 'gridCol')) {
+      rawColPts.push(Math.max(16, twipsToPt(getAttr(gc, 'w'), 80)));
+    }
+  }
+
+  const trList = directChildren(tblEl, 'tr');
+  let detectedCols = rawColPts.length;
+  for (const tr of trList) {
+    const trPr = firstChild(tr, 'trPr');
+    const beforeCols = Number(getAttr(firstChild(trPr, 'gridBefore'), 'val') ?? '0') || 0;
+    const afterCols = Number(getAttr(firstChild(trPr, 'gridAfter'), 'val') ?? '0') || 0;
+    let rowCols = beforeCols + afterCols;
+    for (const tc of directChildren(tr, 'tc')) {
+      const tcPr = firstChild(tc, 'tcPr');
+      const span = Number(getAttr(firstChild(tcPr, 'gridSpan'), 'val') ?? '1') || 1;
+      rowCols += span;
+    }
+    if (rowCols > detectedCols) detectedCols = rowCols;
+  }
+
+  const numCols = Math.max(1, detectedCols);
+  while (rawColPts.length < numCols) {
+    rawColPts.push(maxWidthPt / numCols);
+  }
+
+  // Check requested table width
+  const tblWEl = firstChild(tblPr, 'tblW');
+  const tblWType = (getAttr(tblWEl, 'type') ?? 'dxa').toLowerCase();
+  const tblWVal = Number(getAttr(tblWEl, 'w') ?? '0');
+  const rawGridSum = rawColPts.slice(0, numCols).reduce((a, b) => a + b, 0) || maxWidthPt;
+
+  let targetOuterWidth = maxWidthPt;
+  if (tblWType === 'pct' && tblWVal > 0) {
+    const ratio = Math.min(1, tblWVal / 5000);
+    targetOuterWidth = Math.max(80, maxWidthPt * ratio);
+  } else if (tblWType === 'dxa' && tblWVal > 0) {
+    targetOuterWidth = Math.min(maxWidthPt, Math.max(80, tblWVal / 20));
+  } else if (rawGridSum > 40) {
+    targetOuterWidth = Math.min(maxWidthPt, rawGridSum);
+  }
+
+  // Reserve space for cell horizontal paddings & vertical grid lines so table never clips right margin
+  const strokeReserve = 1.0;
+  const tableChromeWidth = numCols * (padLeft + padRight) + (numCols + 1) * strokeReserve + 1;
+  const availableInnerWidth = Math.max(40, targetOuterWidth - tableChromeWidth);
+  const scaleFactor = availableInnerWidth / Math.max(1, rawGridSum);
+  const widths = rawColPts
+    .slice(0, numCols)
+    .map((w) => Math.max(12, Number((w * scaleFactor).toFixed(2))));
+
+  const grid: TableCellData[][] = [];
+  const activeVerticalOrigins: Array<TableCellData | null> = new Array(numCols).fill(null);
+  let totalEstHeight = 8;
+
+  for (let r = 0; r < trList.length; r++) {
+    const tr = trList[r];
+    const rowCells: TableCellData[] = new Array(numCols);
+    const trPr = firstChild(tr, 'trPr');
+    const gridBefore = Number(getAttr(firstChild(trPr, 'gridBefore'), 'val') ?? '0') || 0;
+
+    let c = 0;
+    for (let k = 0; k < gridBefore && c < numCols; k++, c++) {
+      activeVerticalOrigins[c] = null;
+      rowCells[c] = {
+        isCovered: false,
+        colSpan: 1,
+        rowSpan: 1,
+        stackContent: [{ text: '', fontSize: 1, margin: [0, 0, 0, 0] }],
+        borders: [false, false, false, false],
+        borderColors: ['#1e293b', '#1e293b', '#1e293b', '#1e293b'],
+        borderWidths: [0.6, 0.6, 0.6, 0.6],
+      };
+    }
+
+    const tcs = directChildren(tr, 'tc');
+    let rowMaxEstH = 14;
+
+    for (const tc of tcs) {
+      if (c >= numCols) break;
+      const tcPr = firstChild(tc, 'tcPr');
+      const rawSpan = Number(getAttr(firstChild(tcPr, 'gridSpan'), 'val') ?? '1') || 1;
+      const colSpan = Math.min(rawSpan, numCols - c);
+
+      const vMergeEl = firstChild(tcPr, 'vMerge');
+      const vMergeVal = vMergeEl ? (getAttr(vMergeEl, 'val') ?? 'continue').toLowerCase() : 'none';
+
+      const tcBordersEl = firstChild(tcPr, 'tcBorders');
+      const cellLeftSpec = parseBorderElement(firstChild(tcBordersEl, 'left') ?? firstChild(tcBordersEl, 'start'));
+      const cellTopSpec = parseBorderElement(firstChild(tcBordersEl, 'top'));
+      const cellRightSpec = parseBorderElement(firstChild(tcBordersEl, 'right') ?? firstChild(tcBordersEl, 'end'));
+      const cellBottomSpec = parseBorderElement(firstChild(tcBordersEl, 'bottom'));
+
+      const effLeft = resolveEffectiveBorder(cellLeftSpec, tblBorders.left, tblBorders.insideV, c === 0);
+      const effTop = resolveEffectiveBorder(cellTopSpec, tblBorders.top, tblBorders.insideH, r === 0);
+      const effRight = resolveEffectiveBorder(
+        cellRightSpec,
+        tblBorders.right,
+        tblBorders.insideV,
+        c + colSpan >= numCols,
+      );
+      const effBottom = resolveEffectiveBorder(
+        cellBottomSpec,
+        tblBorders.bottom,
+        tblBorders.insideH,
+        r === trList.length - 1,
+      );
+
+      if (vMergeVal === 'continue' && activeVerticalOrigins[c]) {
+        const origin = activeVerticalOrigins[c]!;
+        origin.rowSpan += 1;
+        // Propagate bottom border onto origin once merge extends downward
+        if (effBottom.enabled) {
+          origin.borders[3] = true;
+          origin.borderColors[3] = effBottom.color;
+          origin.borderWidths[3] = effBottom.width;
+        }
+        for (let spanOffset = 0; spanOffset < colSpan; spanOffset++) {
+          rowCells[c + spanOffset] = {
+            isCovered: true,
+            colSpan: 1,
+            rowSpan: 1,
+            stackContent: [{ text: '' }],
+            borders: [effLeft.enabled, effTop.enabled, effRight.enabled, effBottom.enabled],
+            borderColors: [effLeft.color, effTop.color, effRight.color, effBottom.color],
+            borderWidths: [effLeft.width, effTop.width, effRight.width, effBottom.width],
+          };
+        }
+        c += colSpan;
+        continue;
+      }
+
+      const shdEl = firstChild(tcPr, 'shd');
+      const shdFill = normalizeHexColor(getAttr(shdEl, 'fill'));
+      const fillColor = shdFill && shdFill !== '#ffffff' ? shdFill : undefined;
+
+      // Span width across merged columns
+      let cellInnerW = 0;
+      for (let k = 0; k < colSpan; k++) {
+        cellInnerW += widths[c + k] ?? 60;
+      }
+      cellInnerW = Math.max(20, cellInnerW + Math.max(0, colSpan - 1) * (padLeft + padRight));
+
+      // Collect cell paragraphs & nested tables cleanly
+      const cellStack: Content[] = [];
+      let cellEstH = 0;
+      for (const child of directChildren(tc)) {
+        const tag = localNameOf(child);
+        if (tag === 'p') {
+          const parsedP = await buildParagraphContent(
+            child,
+            cellInnerW,
+            rels,
+            partDir,
+            bctx,
+            true,
+          );
+          if (parsedP.content) {
+            cellStack.push(parsedP.content);
+            cellEstH += parsedP.estimatedHeightPt;
+          }
+        } else if (tag === 'tbl') {
+          const nested = await buildTableContent(child, cellInnerW, rels, partDir, bctx);
+          cellStack.push(nested.content);
+          cellEstH += nested.estimatedHeightPt;
+        }
+      }
+
+      if (cellStack.length === 0) {
+        cellStack.push({ text: '', fontSize: 8, margin: [0, 0, 0, 0] });
+      }
+      if (cellEstH > rowMaxEstH) rowMaxEstH = cellEstH;
+
+      const entry: TableCellData = {
+        isCovered: false,
+        colSpan,
+        rowSpan: 1,
+        stackContent: cellStack,
+        fillColor,
+        borders: [effLeft.enabled, effTop.enabled, effRight.enabled, effBottom.enabled],
+        borderColors: [effLeft.color, effTop.color, effRight.color, effBottom.color],
+        borderWidths: [effLeft.width, effTop.width, effRight.width, effBottom.width],
+      };
+
+      rowCells[c] = entry;
+      for (let spanOffset = 1; spanOffset < colSpan; spanOffset++) {
+        rowCells[c + spanOffset] = {
+          isCovered: true,
+          colSpan: 1,
+          rowSpan: 1,
+          stackContent: [{ text: '' }],
+          borders: [false, effTop.enabled, effRight.enabled, effBottom.enabled],
+          borderColors: [effLeft.color, effTop.color, effRight.color, effBottom.color],
+          borderWidths: [effLeft.width, effTop.width, effRight.width, effBottom.width],
+        };
+      }
+
+      for (let spanOffset = 0; spanOffset < colSpan; spanOffset++) {
+        activeVerticalOrigins[c + spanOffset] = vMergeVal === 'restart' ? entry : null;
+      }
+
+      c += colSpan;
+    }
+
+    while (c < numCols) {
+      activeVerticalOrigins[c] = null;
+      rowCells[c] = {
+        isCovered: false,
+        colSpan: 1,
+        rowSpan: 1,
+        stackContent: [{ text: '', fontSize: 1, margin: [0, 0, 0, 0] }],
+        borders: [false, false, false, false],
+        borderColors: ['#1e293b', '#1e293b', '#1e293b', '#1e293b'],
+        borderWidths: [0.6, 0.6, 0.6, 0.6],
+      };
+      c++;
+    }
+
+    grid.push(rowCells);
+    totalEstHeight += rowMaxEstH + padTop + padBottom;
+  }
+
+  // Ensure empty-table safety
+  if (grid.length === 0) {
+    return {
+      content: { text: '', fontSize: 1, margin: [0, 0, 0, 0] },
+      estimatedHeightPt: 0,
+    };
+  }
+
+  const body: TableCell[][] = grid.map((row) =>
+    row.map((cell): TableCell => {
+      if (cell.isCovered) {
+        return { text: '' };
+      }
+
+      const out: any = {
+        stack: cell.stackContent,
+        border: cell.borders,
+        borderColor: cell.borderColors,
+        margin: [0, 0, 0, 0],
+      };
+
+      if (cell.colSpan > 1) out.colSpan = cell.colSpan;
+      if (cell.rowSpan > 1) out.rowSpan = cell.rowSpan;
+      if (cell.fillColor) out.fillColor = cell.fillColor;
+      return out;
+    }),
+  );
+
+  // Pick representative line width/color for table layout
+  let defaultLineWidth = 0.6;
+  let defaultLineColor = '#1e293b';
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell.borders.some(Boolean)) {
+        const idx = cell.borders.findIndex(Boolean);
+        defaultLineWidth = cell.borderWidths[idx] ?? 0.6;
+        defaultLineColor = cell.borderColors[idx] ?? '#1e293b';
+        break;
+      }
+    }
+  }
+
+  const tblAlign = (getAttr(firstChild(tblPr, 'jc'), 'val') ?? 'left').toLowerCase();
+  const wrapperMarginLeft =
+    tblAlign === 'center' && maxWidthPt > targetOuterWidth + 8
+      ? Number(((maxWidthPt - targetOuterWidth) / 2).toFixed(1))
+      : tblAlign === 'right' && maxWidthPt > targetOuterWidth + 8
+        ? Number((maxWidthPt - targetOuterWidth).toFixed(1))
+        : 0;
+
+  return {
+    content: {
+      table: {
+        widths,
+        body,
+        dontBreakRows: true,
+      },
+      layout: {
+        hLineWidth: () => defaultLineWidth,
+        vLineWidth: () => defaultLineWidth,
+        hLineColor: () => defaultLineColor,
+        vLineColor: () => defaultLineColor,
+        paddingLeft: () => padLeft,
+        paddingRight: () => padRight,
+        paddingTop: () => padTop,
+        paddingBottom: () => padBottom,
+      },
+      margin: [wrapperMarginLeft, 2, 0, 6],
+    },
+    estimatedHeightPt: totalEstHeight,
+  };
+}
+
+async function parseBlockElements(
+  container: Element,
+  maxWidthPt: number,
+  rels: Map<string, RelEntry>,
+  partDir: string,
+  bctx: BuildContext,
+): Promise<{ items: Content[]; estimatedHeightPt: number }> {
+  const items: Content[] = [];
+  let totalHeight = 0;
+
+  for (const child of directChildren(container)) {
+    const tag = localNameOf(child);
+    if (tag === 'p') {
+      const pPr = firstChild(child, 'pPr');
+      const hasSectionBreak = Boolean(firstChild(pPr, 'sectPr'));
+      const res = await buildParagraphContent(
+        child,
+        maxWidthPt,
+        rels,
+        partDir,
+        bctx,
+        false,
+        hasSectionBreak,
+      );
+      if (res.content) {
+        items.push(res.content);
+        totalHeight += res.estimatedHeightPt;
+      }
+    } else if (tag === 'tbl') {
+      const tbl = await buildTableContent(child, maxWidthPt, rels, partDir, bctx);
+      items.push(tbl.content);
+      totalHeight += tbl.estimatedHeightPt;
+    } else if (tag === 'sdt') {
+      const sdtContent = firstChild(child, 'sdtContent');
+      if (sdtContent) {
+        const sub = await parseBlockElements(sdtContent, maxWidthPt, rels, partDir, bctx);
+        items.push(...sub.items);
+        totalHeight += sub.estimatedHeightPt;
+      }
+    }
+  }
+
+  return { items, estimatedHeightPt: totalHeight };
+}
+
+function replacePagePlaceholders(node: any, currentPage: number, pageCount: number): any {
+  if (typeof node === 'string') {
+    return node
+      .replace(/\{\{PAGE\}\}/g, String(currentPage))
+      .replace(/\{\{NUMPAGES\}\}/g, String(pageCount));
+  }
+  if (Array.isArray(node)) {
+    return node.map((item) => replacePagePlaceholders(item, currentPage, pageCount));
+  }
+  if (node && typeof node === 'object') {
+    const cloned: any = {};
+    for (const [k, v] of Object.entries(node)) {
+      cloned[k] = replacePagePlaceholders(v, currentPage, pageCount);
+    }
+    return cloned;
+  }
+  return node;
+}
+
+async function parseHeaderOrFooterPart(
+  zip: JSZip,
+  targetPath: string,
+  usableWidthPt: number,
+  bctx: BuildContext,
+): Promise<{ items: Content[]; estimatedHeightPt: number }> {
+  const xmlFile = zip.file(targetPath);
+  if (!xmlFile) return { items: [], estimatedHeightPt: 0 };
+
+  const lastSlash = targetPath.lastIndexOf('/');
+  const partDir = lastSlash >= 0 ? targetPath.slice(0, lastSlash) : 'word';
+  const fileName = lastSlash >= 0 ? targetPath.slice(lastSlash + 1) : targetPath;
+  const partRelsPath = `${partDir}/_rels/${fileName}.rels`;
+
+  const rels = await parseRelsFile(zip, partRelsPath);
+  const doc = parseXmlString(await xmlFile.async('string'));
+  const root = doc.documentElement;
+  if (!root) return { items: [], estimatedHeightPt: 0 };
+
+  const parsed = await parseBlockElements(root, usableWidthPt, rels, partDir, bctx);
+
+  // Trim trailing spacer paragraphs in headers/footers to keep margins clean
+  while (parsed.items.length > 0) {
+    const last = parsed.items[parsed.items.length - 1] as any;
+    if (typeof last?.text === 'string' && last.text.trim() === '' && !last.pageBreak) {
+      parsed.items.pop();
+    } else {
+      break;
+    }
+  }
+
+  return parsed;
+}
+
+async function convertDocxToPdfBytes(buffer: ArrayBuffer): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(buffer);
+  const docEntry = zip.file('word/document.xml');
+  if (!docEntry) {
+    throw new Error('Invalid .docx archive: missing word/document.xml');
+  }
+
+  const docXml = await docEntry.async('string');
+  const docDom = parseXmlString(docXml);
+  const bodyEl = firstChild(docDom.documentElement, 'body');
+  if (!bodyEl) {
+    throw new Error('Invalid .docx archive: missing document body');
+  }
+
+  const [styles, numbering, docRels] = await Promise.all([
+    parseStylesXml(zip),
+    parseNumberingXml(zip),
+    parseRelsFile(zip, 'word/_rels/document.xml.rels'),
+  ]);
+
+  const bctx: BuildContext = {
+    zip,
+    styles,
+    numbering,
+    numCounters: new Map(),
+    imageCache: new Map(),
+  };
+
+  // Extract section properties (page size, margins, header/footer references)
+  const sectPrList = directChildren(bodyEl, 'sectPr');
+  const sectPr = sectPrList[sectPrList.length - 1] ?? findDescendants(bodyEl, 'sectPr').pop() ?? null;
+
+  const pgSzEl = firstChild(sectPr, 'pgSz');
+  let pageWidthPt = twipsToPt(getAttr(pgSzEl, 'w'), 595.28);
+  let pageHeightPt = twipsToPt(getAttr(pgSzEl, 'h'), 841.89);
+  const orientAttr = (getAttr(pgSzEl, 'orient') ?? '').toLowerCase();
+  if (orientAttr === 'landscape' && pageWidthPt < pageHeightPt) {
+    [pageWidthPt, pageHeightPt] = [pageHeightPt, pageWidthPt];
+  }
+  const orientation: 'portrait' | 'landscape' =
+    pageWidthPt > pageHeightPt ? 'landscape' : 'portrait';
+
+  const pgMarEl = firstChild(sectPr, 'pgMar');
+  let marginTop = Math.max(24, Math.min(110, twipsToPt(getAttr(pgMarEl, 'top'), 56.7)));
+  const marginRight = Math.max(24, Math.min(110, twipsToPt(getAttr(pgMarEl, 'right'), 42.5)));
+  let marginBottom = Math.max(24, Math.min(110, twipsToPt(getAttr(pgMarEl, 'bottom'), 56.7)));
+  const marginLeft = Math.max(24, Math.min(110, twipsToPt(getAttr(pgMarEl, 'left'), 68.0)));
+  const headerTopOffset = Math.max(12, Math.min(48, twipsToPt(getAttr(pgMarEl, 'header'), 20)));
+  const footerBottomOffset = Math.max(12, Math.min(48, twipsToPt(getAttr(pgMarEl, 'footer'), 20)));
+
+  const usableWidthPt = Math.max(200, pageWidthPt - marginLeft - marginRight);
+
+  // Parse headers & footers referenced by sectPr
+  const headerRefs = sectPr ? directChildren(sectPr, 'headerReference') : [];
+  const footerRefs = sectPr ? directChildren(sectPr, 'footerReference') : [];
+
+  const titlePg = Boolean(sectPr && firstChild(sectPr, 'titlePg'));
+  const headerByType = new Map<string, { items: Content[]; estimatedHeightPt: number }>();
+  const footerByType = new Map<string, { items: Content[]; estimatedHeightPt: number }>();
+
+  for (const href of headerRefs) {
+    const rId = getAttr(href, 'id');
+    const type = (getAttr(href, 'type') ?? 'default').toLowerCase();
+    if (!rId) continue;
+    const rel = docRels.get(rId);
+    if (!rel) continue;
+    const targetPath = resolveZipTarget('word', rel.target);
+    headerByType.set(
+      type,
+      await parseHeaderOrFooterPart(zip, targetPath, usableWidthPt, bctx),
+    );
+  }
+
+  for (const fref of footerRefs) {
+    const rId = getAttr(fref, 'id');
+    const type = (getAttr(fref, 'type') ?? 'default').toLowerCase();
+    if (!rId) continue;
+    const rel = docRels.get(rId);
+    if (!rel) continue;
+    const targetPath = resolveZipTarget('word', rel.target);
+    footerByType.set(
+      type,
+      await parseHeaderOrFooterPart(zip, targetPath, usableWidthPt, bctx),
+    );
+  }
+
+  let maxHeaderHeight = 0;
+  for (const h of headerByType.values()) {
+    if (h.items.length > 0 && h.estimatedHeightPt > maxHeaderHeight) {
+      maxHeaderHeight = h.estimatedHeightPt;
+    }
+  }
+  if (maxHeaderHeight > 0) {
+    marginTop = Math.max(marginTop, Math.ceil(headerTopOffset + maxHeaderHeight + 12));
+  }
+
+  let maxFooterHeight = 0;
+  for (const f of footerByType.values()) {
+    if (f.items.length > 0 && f.estimatedHeightPt > maxFooterHeight) {
+      maxFooterHeight = f.estimatedHeightPt;
+    }
+  }
+  if (maxFooterHeight > 0) {
+    marginBottom = Math.max(marginBottom, Math.ceil(footerBottomOffset + maxFooterHeight + 10));
+  }
+
+  const bodyParsed = await parseBlockElements(bodyEl, usableWidthPt, docRels, 'word', bctx);
+
+  // Trim trailing empty spacer paragraphs from document body so stray trailing blank page does not appear
+  while (bodyParsed.items.length > 1) {
+    const last = bodyParsed.items[bodyParsed.items.length - 1] as any;
+    if (typeof last?.text === 'string' && last.text.trim() === '' && !last.pageBreak) {
+      bodyParsed.items.pop();
+    } else {
+      break;
+    }
+  }
+
+  if (bodyParsed.items.length === 0 && maxHeaderHeight === 0) {
+    throw new Error('Document contains no renderable content');
+  }
+
+  const docDefinition: TDocumentDefinitions = {
+    pageSize: {
+      width: Number(pageWidthPt.toFixed(2)),
+      height: Number(pageHeightPt.toFixed(2)),
+    },
+    pageOrientation: orientation,
+    pageMargins: [marginLeft, marginTop, marginRight, marginBottom],
+    defaultStyle: {
+      font: 'Roboto',
+      fontSize: Number((styles.defaultRun.fontSize ?? 10.5).toFixed(1)),
+      color: styles.defaultRun.color ?? '#0f172a',
+      lineHeight: styles.defaultParagraph.lineHeight ?? 1.16,
+    },
+    content: bodyParsed.items.length > 0 ? bodyParsed.items : [{ text: '' }],
+  };
+
+  if (maxHeaderHeight > 0) {
+    docDefinition.header = (currentPage: number, pageCount: number) => {
+      const part = titlePg
+        ? currentPage === 1
+          ? headerByType.get('first') ?? headerByType.get('default')
+          : headerByType.get('default')
+        : headerByType.get('default') ?? headerByType.get('first');
+      if (!part || part.items.length === 0) return { text: '' };
+      return {
+        stack: replacePagePlaceholders(part.items, currentPage, pageCount),
+        margin: [marginLeft, headerTopOffset, marginRight, 0],
+      };
+    };
+  }
+
+  if (maxFooterHeight > 0) {
+    docDefinition.footer = (currentPage: number, pageCount: number) => {
+      const part = titlePg
+        ? currentPage === 1
+          ? footerByType.get('first') ?? footerByType.get('default')
+          : footerByType.get('default')
+        : footerByType.get('default') ?? footerByType.get('first');
+      if (!part || part.items.length === 0) return { text: '' };
+      return {
+        stack: replacePagePlaceholders(part.items, currentPage, pageCount),
+        margin: [marginLeft, 4, marginRight, footerBottomOffset],
+      };
+    };
+  }
+
+  const pdfDoc = pdfMake.createPdf(docDefinition);
+  const outBuffer: Uint8Array = await pdfDoc.getBuffer();
+  return outBuffer instanceof Uint8Array ? outBuffer : new Uint8Array(outBuffer);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Legacy .doc (OLE2), .rtf, HTML-as-.doc Extractors & Vector PDF Builder      */
+/* -------------------------------------------------------------------------- */
+
 function cleanWordText(raw: string): string {
-  // Strip Word field codes (\x13 ... \x14 visible text \x15)
   let text = raw.replace(/\x13[^\x14\x15]*\x14/g, '');
   text = text.replace(/[\x13\x14\x15]/g, '');
-  // Replace Word cell/row markers and special whitespace
   text = text.replace(/\x07/g, '\t');
   text = text.replace(/[\x0b\x0c]/g, '\n');
   text = text.replace(/\r\n?/g, '\n');
-  // Remove remaining non-printable control chars except \n and \t
   text = text.replace(/[\x00-\x08\x0e-\x1f]/g, '');
   return text;
 }
@@ -80,7 +1951,6 @@ function extractTextFromOle2Doc(bytes: Uint8Array): string {
   const tableName = (flags & 0x0200) !== 0 ? '1Table' : '0Table';
   const tableEntry = CFB.find(container, tableName) ?? CFB.find(container, `/${tableName}`);
 
-  // Dynamically walk FIB sections (FibBase=32, csw, cslw, cbRgFcLcb)
   let pos = 32;
   const csw = wView.getUint16(pos, true);
   pos += 2 + csw * 2;
@@ -111,14 +1981,12 @@ function extractTextFromOle2Doc(bytes: Uint8Array): string {
       let clxPos = fcClx;
       const clxEnd = fcClx + lcbClx;
 
-      // Skip Prc records (clxt === 0x01)
       while (clxPos < clxEnd && tBytes[clxPos] === 0x01) {
         if (clxPos + 3 > clxEnd) break;
         const cbGrpprl = tView.getUint16(clxPos + 1, true);
         clxPos += 3 + cbGrpprl;
       }
 
-      // Read Pcdt record (clxt === 0x02)
       if (clxPos + 5 <= clxEnd && tBytes[clxPos] === 0x02) {
         const lcbPlcPcd = tView.getUint32(clxPos + 1, true);
         const plcStart = clxPos + 5;
@@ -175,12 +2043,10 @@ function extractTextFromOle2Doc(bytes: Uint8Array): string {
     }
   }
 
-  // Fallback: extract readable UTF-16LE / CP1251 text segment from WordDocument stream
   const fcMin = wView.getUint32(0x0018, true);
   const fcMac = wView.getUint32(0x001c, true);
   if (fcMac > fcMin && fcMac <= wBytes.length) {
     const slice = wBytes.subarray(fcMin, fcMac);
-    // Heuristic: if every second byte is frequently 0x00 or 0x04 (Cyrillic UTF-16LE), decode as utf-16le
     let zeroOrCyrHigh = 0;
     const sampleLen = Math.min(slice.length, 512);
     for (let i = 1; i < sampleLen; i += 2) {
@@ -288,7 +2154,6 @@ function extractTextFromRtf(bytes: Uint8Array): string {
         continue;
       }
 
-      // Control word
       const match = raw.slice(i).match(/^([a-zA-Z]+)(-?\d+)? ?/);
       if (match) {
         const word = match[1];
@@ -306,7 +2171,6 @@ function extractTextFromRtf(bytes: Uint8Array): string {
         } else if (word === 'u' && param !== undefined) {
           const codePoint = param < 0 ? param + 65536 : param;
           output.push(String.fromCharCode(codePoint));
-          // Skip fallback ANSI characters after \uN
           let skipped = 0;
           while (skipped < ucSkip && i < raw.length) {
             if (raw[i] === '\\' && raw[i + 1] === "'") {
@@ -333,30 +2197,65 @@ function extractTextFromRtf(bytes: Uint8Array): string {
   return output.join('');
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function textToStructuredHtml(text: string): string {
+function structuredTextToPdfContent(text: string): Content[] {
   const lines = text.split('\n');
-  const htmlParts: string[] = [];
+  const content: Content[] = [];
   let tableRows: string[][] = [];
 
   const flushTable = () => {
     if (tableRows.length === 0) return;
-    htmlParts.push('<table><tbody>');
-    for (const row of tableRows) {
-      htmlParts.push('<tr>');
-      for (const cell of row) {
-        htmlParts.push(`<td>${escapeHtml(cell.trim())}</td>`);
-      }
-      htmlParts.push('</tr>');
+
+    // Single two-column line like a signature row -> clean split columns instead of heavy grid
+    if (tableRows.length === 1 && tableRows[0].length === 2) {
+      content.push({
+        columns: [
+          { width: '*', text: tableRows[0][0].trim(), alignment: 'left' },
+          { width: 'auto', text: tableRows[0][1].trim(), alignment: 'right' },
+        ],
+        margin: [0, 4, 0, 4],
+      });
+      tableRows = [];
+      return;
     }
-    htmlParts.push('</tbody></table>');
+
+    const numCols = Math.max(1, ...tableRows.map((r) => r.length));
+    const usableW = 595.28 - 48 - 48;
+    const chromeW = numCols * 9 + (numCols + 1) * 0.6 + 1;
+    const colW = Number((Math.max(30, (usableW - chromeW) / numCols)).toFixed(2));
+    const widths = new Array(numCols).fill(colW);
+
+    const body: TableCell[][] = tableRows.map((row, rIdx) => {
+      const cells: TableCell[] = [];
+      for (let c = 0; c < numCols; c++) {
+        cells.push({
+          text: (row[c] ?? '').trim(),
+          fontSize: 9.5,
+          bold: rIdx === 0,
+          fillColor: rIdx === 0 ? '#f1f5f9' : undefined,
+          margin: [0, 0, 0, 0],
+        });
+      }
+      return cells;
+    });
+
+    content.push({
+      table: {
+        widths,
+        body,
+        dontBreakRows: true,
+      },
+      layout: {
+        hLineWidth: () => 0.6,
+        vLineWidth: () => 0.6,
+        hLineColor: () => '#475569',
+        vLineColor: () => '#475569',
+        paddingLeft: () => 4.5,
+        paddingRight: () => 4.5,
+        paddingTop: () => 3,
+        paddingBottom: () => 3,
+      },
+      margin: [0, 4, 0, 6],
+    });
     tableRows = [];
   };
 
@@ -373,304 +2272,212 @@ function textToStructuredHtml(text: string): string {
     flushTable();
     const trimmed = line.trim();
     if (!trimmed) {
-      htmlParts.push('<div class="spacer"></div>');
+      content.push({ text: ' ', fontSize: 5, margin: [0, 0, 0, 0] });
     } else {
-      htmlParts.push(`<p>${escapeHtml(trimmed)}</p>`);
+      content.push({
+        text: trimmed,
+        fontSize: 10.5,
+        lineHeight: 1.18,
+        margin: [0, 0, 0, 4],
+      });
     }
   }
 
   flushTable();
-  return htmlParts.join('\n');
+  return content;
 }
 
-function sanitizeHtmlForDoc(bytes: Uint8Array): string {
+function htmlTableToPdfMake(tableEl: Element, maxWidthPt: number): Content {
+  const trEls = Array.from(tableEl.querySelectorAll('tr'));
+  if (trEls.length === 0) return { text: '' };
+
+  let maxCols = 1;
+  for (const tr of trEls) {
+    let cols = 0;
+    for (const cell of Array.from(tr.children)) {
+      if (cell.tagName === 'TD' || cell.tagName === 'TH') {
+        cols += Math.max(1, Number(cell.getAttribute('colspan') ?? '1') || 1);
+      }
+    }
+    if (cols > maxCols) maxCols = cols;
+  }
+
+  const occupied: boolean[][] = trEls.map(() => new Array(maxCols).fill(false));
+  const body: TableCell[][] = [];
+
+  for (let r = 0; r < trEls.length; r++) {
+    const row: any[] = new Array(maxCols).fill(null);
+    const cells = Array.from(trEls[r].children).filter(
+      (el) => el.tagName === 'TD' || el.tagName === 'TH',
+    );
+    let c = 0;
+    for (const cellEl of cells) {
+      while (c < maxCols && occupied[r][c]) c++;
+      if (c >= maxCols) break;
+
+      const colSpan = Math.min(maxCols - c, Math.max(1, Number(cellEl.getAttribute('colspan') ?? '1') || 1));
+      const rowSpan = Math.min(trEls.length - r, Math.max(1, Number(cellEl.getAttribute('rowspan') ?? '1') || 1));
+
+      for (let rr = r; rr < r + rowSpan; rr++) {
+        for (let cc = c; cc < c + colSpan; cc++) {
+          if (rr !== r || cc !== c) {
+            occupied[rr][cc] = true;
+          }
+        }
+      }
+
+      const isTh = cellEl.tagName === 'TH';
+      const cellObj: any = {
+        text: (cellEl.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        fontSize: 9.5,
+        bold: isTh,
+        fillColor: isTh ? '#f1f5f9' : undefined,
+        margin: [0, 0, 0, 0],
+      };
+      if (colSpan > 1) cellObj.colSpan = colSpan;
+      if (rowSpan > 1) cellObj.rowSpan = rowSpan;
+
+      row[c] = cellObj;
+      c += colSpan;
+    }
+
+    for (let k = 0; k < maxCols; k++) {
+      if (!row[k]) row[k] = { text: '' };
+    }
+    body.push(row);
+  }
+
+  const chromeW = maxCols * 9 + (maxCols + 1) * 0.6 + 1;
+  const colW = Number(Math.max(24, (maxWidthPt - chromeW) / maxCols).toFixed(2));
+
+  return {
+    table: {
+      widths: new Array(maxCols).fill(colW),
+      body,
+      dontBreakRows: true,
+    },
+    layout: {
+      hLineWidth: () => 0.6,
+      vLineWidth: () => 0.6,
+      hLineColor: () => '#475569',
+      vLineColor: () => '#475569',
+      paddingLeft: () => 4.5,
+      paddingRight: () => 4.5,
+      paddingTop: () => 3,
+      paddingBottom: () => 3,
+    },
+    margin: [0, 4, 0, 6],
+  };
+}
+
+function htmlDocToPdfContent(bytes: Uint8Array): Content[] {
   const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
   const parser = new DOMParser();
   const parsed = parser.parseFromString(raw, 'text/html');
-  parsed.querySelectorAll('script, iframe, object, embed, link[rel="stylesheet"]').forEach((el) => {
-    el.remove();
-  });
-  return parsed.body ? parsed.body.innerHTML : `<pre>${escapeHtml(raw)}</pre>`;
-}
+  parsed.querySelectorAll('script, style, iframe, object, embed').forEach((el) => el.remove());
 
-function createIsolatedIframe(): Promise<{
-  iframe: HTMLIFrameElement;
-  doc: Document;
-}> {
-  return new Promise((resolve) => {
-    const iframe = document.createElement('iframe');
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.style.position = 'fixed';
-    iframe.style.left = '-12000px';
-    iframe.style.top = '0';
-    iframe.style.width = '960px';
-    iframe.style.height = '1400px';
-    iframe.style.border = '0';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
+  const root = parsed.body;
+  if (!root) return structuredTextToPdfContent(raw);
 
-    iframe.onload = () => {
-      const doc = iframe.contentDocument;
-      if (doc) {
-        resolve({ iframe, doc });
+  const usableW = 595.28 - 96;
+  const blocks: Content[] = [];
+
+  const walk = (node: Node) => {
+    if (node.nodeType === 3) {
+      const txt = (node.textContent ?? '').trim();
+      if (txt) {
+        blocks.push({ text: txt, fontSize: 10.5, margin: [0, 0, 0, 4] });
       }
-    };
+      return;
+    }
+    if (node.nodeType !== 1) return;
 
-    iframe.srcdoc = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: #ffffff;
-    color: #0f172a;
-    font-family: "Times New Roman", Georgia, "Liberation Serif", serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .docx-wrapper {
-    background: #ffffff !important;
-    padding: 0 !important;
-  }
-  .docx-wrapper > section.docx {
-    box-shadow: none !important;
-    margin: 0 auto !important;
-  }
-  .doc-pages-root {
-    width: ${A4_WIDTH_PX}px;
-    background: #ffffff;
-  }
-  .doc-page {
-    width: ${A4_WIDTH_PX}px;
-    min-height: ${A4_HEIGHT_PX}px;
-    padding: 56px 56px 56px 68px;
-    background: #ffffff;
-    color: #111827;
-    font-family: "DM Sans", Arial, "Helvetica Neue", sans-serif;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  .doc-page p {
-    margin: 0 0 6px 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .doc-page .spacer {
-    height: 10px;
-  }
-  .doc-page table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 8px 0 12px 0;
-    font-size: 12px;
-  }
-  .doc-page td, .doc-page th {
-    border: 1px solid #cbd5e1;
-    padding: 5px 7px;
-    vertical-align: top;
-    word-break: break-word;
-  }
-  .doc-flow-content {
-    width: ${A4_WIDTH_PX}px;
-    padding: 56px 56px 56px 68px;
-    background: #ffffff;
-    color: #111827;
-    font-family: "DM Sans", Arial, "Helvetica Neue", sans-serif;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  .doc-flow-content p {
-    margin: 0 0 6px 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .doc-flow-content .spacer {
-    height: 10px;
-  }
-  .doc-flow-content table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 8px 0 12px 0;
-    font-size: 12px;
-  }
-  .doc-flow-content td, .doc-flow-content th {
-    border: 1px solid #cbd5e1;
-    padding: 5px 7px;
-    vertical-align: top;
-    word-break: break-word;
-  }
-</style>
-</head>
-<body></body>
-</html>`;
+    const el = node as Element;
+    const tag = el.tagName.toUpperCase();
+    if (tag === 'TABLE') {
+      blocks.push(htmlTableToPdfMake(el, usableW));
+      return;
+    }
+    if (/^H[1-6]$/.test(tag)) {
+      const level = Number(tag[1]);
+      const sizes = [16, 14, 12.5, 11.5, 11, 10.5];
+      const txt = (el.textContent ?? '').trim();
+      if (txt) {
+        blocks.push({
+          text: txt,
+          fontSize: sizes[level - 1] ?? 11,
+          bold: true,
+          margin: [0, 6, 0, 4],
+        });
+      }
+      return;
+    }
+    if (tag === 'P' || tag === 'LI') {
+      const txt = (el.textContent ?? '').trim();
+      if (txt) {
+        blocks.push({
+          text: tag === 'LI' ? `•  ${txt}` : txt,
+          fontSize: 10.5,
+          margin: [tag === 'LI' ? 12 : 0, 0, 0, 4],
+        });
+      }
+      return;
+    }
 
-    document.body.appendChild(iframe);
-  });
+    for (const child of Array.from(el.childNodes)) {
+      walk(child);
+    }
+  };
+
+  for (const child of Array.from(root.childNodes)) {
+    walk(child);
+  }
+
+  return blocks.length > 0 ? blocks : structuredTextToPdfContent(root.textContent ?? '');
 }
 
-async function waitForImages(root: HTMLElement): Promise<void> {
-  const imgs = Array.from(root.querySelectorAll('img'));
-  await Promise.all(
-    imgs.map((img) => {
-      if (img.complete) return Promise.resolve();
-      return new Promise<void>((resolve) => {
-        img.addEventListener('load', () => resolve(), { once: true });
-        img.addEventListener('error', () => resolve(), { once: true });
-      });
-    }),
-  );
+async function buildSimpleDocPdfBytes(content: Content[]): Promise<Uint8Array> {
+  const safeContent: Content[] = content.length > 0 ? content : [{ text: '' }];
+  const docDefinition: TDocumentDefinitions = {
+    pageSize: 'A4',
+    pageOrientation: 'portrait',
+    pageMargins: [48, 48, 48, 48],
+    defaultStyle: {
+      font: 'Roboto',
+      fontSize: 10.5,
+      color: '#0f172a',
+      lineHeight: 1.18,
+    },
+    content: safeContent,
+  };
+
+  const pdfDoc = pdfMake.createPdf(docDefinition);
+  const outBuffer: Uint8Array = await pdfDoc.getBuffer();
+  return outBuffer instanceof Uint8Array ? outBuffer : new Uint8Array(outBuffer);
 }
 
 /**
- * Finds a mostly-white horizontal scanline near targetY so tall rendered
- * documents do not slice through the middle of a line of text.
+ * Step 1 of Word -> PDF -> JPEG -> PDF:
+ * Converts a Word document (.docx, .doc, .rtf, HTML-as-doc) into a clean
+ * vector PDF (Uint8Array) with accurate page layout, embedded images, tables,
+ * merged cells, borders, and Cyrillic/Latin typography, eliminating HTML/canvas
+ * baseline distortion and border clipping.
  */
-function findCleanCutY(canvas: HTMLCanvasElement, targetY: number): number {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return targetY;
+export async function convertWordToIntermediatePdf(file: File): Promise<Uint8Array> {
+  ensurePdfMakeFonts();
 
-  const searchRadius = Math.min(90, Math.round(canvas.height * 0.06));
-  const minY = Math.max(10, targetY - searchRadius);
-  const maxY = Math.min(canvas.height - 10, targetY + searchRadius);
-
-  let bestY = targetY;
-  let bestScore = -1;
-
-  for (let y = maxY; y >= minY; y -= 2) {
-    const row = ctx.getImageData(0, y, canvas.width, 1).data;
-    let brightPixels = 0;
-    for (let x = 0; x < row.length; x += 16) {
-      if (row[x] > 242 && row[x + 1] > 242 && row[x + 2] > 242) {
-        brightPixels++;
-      }
-    }
-    if (brightPixels > bestScore) {
-      bestScore = brightPixels;
-      bestY = y;
-      // Early exit if row is completely white
-      if (brightPixels >= Math.floor(row.length / 16)) {
-        break;
-      }
-    }
-  }
-
-  return bestY;
-}
-
-function sliceTallCanvasIntoA4Pages(tallCanvas: HTMLCanvasElement): HTMLCanvasElement[] {
-  const pageHeightPx = Math.round(tallCanvas.width * A4_RATIO);
-  if (tallCanvas.height <= pageHeightPx * 1.08) {
-    return [tallCanvas];
-  }
-
-  const pages: HTMLCanvasElement[] = [];
-  let y = 0;
-
-  while (y < tallCanvas.height - 12) {
-    const remaining = tallCanvas.height - y;
-    const rawCut = y + Math.min(pageHeightPx, remaining);
-    const cutY =
-      remaining <= pageHeightPx * 1.05 ? tallCanvas.height : findCleanCutY(tallCanvas, rawCut);
-    const sliceH = Math.max(1, cutY - y);
-
-    const pageCanvas = document.createElement('canvas');
-    pageCanvas.width = tallCanvas.width;
-    pageCanvas.height = pageHeightPx;
-    const ctx = pageCanvas.getContext('2d', { alpha: false });
-    if (ctx) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-      ctx.drawImage(tallCanvas, 0, y, tallCanvas.width, sliceH, 0, 0, tallCanvas.width, sliceH);
-    }
-
-    pages.push(pageCanvas);
-    y = cutY;
-  }
-
-  tallCanvas.width = 0;
-  tallCanvas.height = 0;
-  return pages;
-}
-
-export async function renderWordFileToCanvases(file: File): Promise<HTMLCanvasElement[]> {
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   const format = detectWordFormat(bytes, file.name);
 
-  const { iframe, doc } = await createIsolatedIframe();
-
-  try {
-    const styleContainer = doc.createElement('div');
-    const bodyContainer = doc.createElement('div');
-    doc.body.appendChild(styleContainer);
-    doc.body.appendChild(bodyContainer);
-
-    let elementsToCapture: HTMLElement[] = [];
-
-    if (format === 'docx') {
-      await renderAsync(buffer, bodyContainer, styleContainer, {
-        inWrapper: true,
-        ignoreWidth: false,
-        ignoreHeight: false,
-        ignoreFonts: false,
-        breakPages: true,
-        useBase64URL: true,
-        renderHeaders: true,
-        renderFooters: true,
-        renderFootnotes: true,
-        renderEndnotes: true,
-      });
-
-      const sections = Array.from(bodyContainer.querySelectorAll('section')) as HTMLElement[];
-      elementsToCapture = sections.length > 0 ? sections : [bodyContainer];
-    } else {
-      const htmlContent =
-        format === 'html'
-          ? sanitizeHtmlForDoc(bytes)
-          : format === 'rtf'
-            ? textToStructuredHtml(extractTextFromRtf(bytes))
-            : textToStructuredHtml(extractTextFromOle2Doc(bytes));
-
-      const flowEl = doc.createElement('div');
-      flowEl.className = 'doc-flow-content';
-      flowEl.innerHTML = htmlContent;
-      bodyContainer.appendChild(flowEl);
-      elementsToCapture = [flowEl];
-    }
-
-    await waitForImages(bodyContainer);
-    // Allow browser layout to settle inside iframe
-    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 40)));
-
-    const pageCanvases: HTMLCanvasElement[] = [];
-
-    for (const el of elementsToCapture) {
-      const width = Math.max(el.scrollWidth, el.offsetWidth, A4_WIDTH_PX);
-      const height = Math.max(el.scrollHeight, el.offsetHeight, 100);
-
-      const captured = await html2canvas(el, {
-        backgroundColor: '#ffffff',
-        scale: 2.2,
-        useCORS: true,
-        logging: false,
-        width,
-        height,
-        windowWidth: Math.max(width, doc.documentElement.scrollWidth),
-        windowHeight: Math.max(height, doc.documentElement.scrollHeight),
-      });
-
-      const sliced = sliceTallCanvasIntoA4Pages(captured);
-      pageCanvases.push(...sliced);
-    }
-
-    if (pageCanvases.length === 0) {
-      throw new Error('Document produced no renderable pages');
-    }
-
-    return pageCanvases;
-  } finally {
-    iframe.remove();
+  if (format === 'docx') {
+    return convertDocxToPdfBytes(buffer);
   }
+
+  if (format === 'html') {
+    return buildSimpleDocPdfBytes(htmlDocToPdfContent(bytes));
+  }
+
+  const text = format === 'rtf' ? extractTextFromRtf(bytes) : extractTextFromOle2Doc(bytes);
+  return buildSimpleDocPdfBytes(structuredTextToPdfContent(text));
 }

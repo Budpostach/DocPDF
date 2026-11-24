@@ -4,7 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { ColorMode, ConversionSettings, PageOutput, QueueItem } from '../types/pdf';
 import { convertExcelToIntermediatePdf } from './excelConverter';
-import { renderWordFileToCanvases } from './wordConverter';
+import { convertWordToIntermediatePdf } from './wordConverter';
 
 // Bundle the worker locally with Vite so zero external CDNs are required.
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -300,158 +300,12 @@ function disposeFrames(frames: RenderedPageFrame[]): void {
   }
 }
 
-function scaleMasterCanvasForDpi(
-  master: HTMLCanvasElement,
-  ptWidth: number,
-  ptHeight: number,
-  dpi: number,
-): HTMLCanvasElement {
-  const targetW = Math.max(1, Math.min(master.width, Math.round((ptWidth * dpi) / 72)));
-  const targetH = Math.max(1, Math.round((targetW * ptHeight) / ptWidth));
-  const canvas = makeCanvas(targetW, targetH);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: false });
-  if (ctx) {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, targetW, targetH);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(master, 0, 0, targetW, targetH);
-  }
-  return canvas;
-}
-
-async function convertCanvasesToPdfDocument(
-  masterCanvases: HTMLCanvasElement[],
-  file: File,
-  settings: ConversionSettings,
-  onProgress: (currentPage: number, totalPages: number) => void,
-): Promise<{ totalPages: number; outputs: PageOutput[] }> {
-  const base = stripDocumentExtension(file.name);
-  const maxSizeBytes = settings.sizeLimitKb * 1024;
-  const totalPages = masterCanvases.length;
-
-  try {
-    if (settings.outputMode === 'split') {
-      const outputs: PageOutput[] = [];
-      const schedule = selectDpiSchedule(maxSizeBytes, 1);
-
-      for (let i = 0; i < totalPages; i++) {
-        const p = i + 1;
-        onProgress(p, totalPages);
-        await yieldFrame();
-
-        const master = masterCanvases[i];
-        const ptWidth = master.width > master.height ? 841.89 : 595.28;
-        const ptHeight = Math.max(200, (ptWidth * master.height) / master.width);
-
-        let chosenBytes: ArrayBuffer | null = null;
-        let chosenBlob: Blob | null = null;
-        let chosenDpi = schedule[schedule.length - 1].dpi;
-        let withinLimit = false;
-
-        for (let idx = 0; idx < schedule.length; idx++) {
-          const tier = schedule[idx];
-          const canvas = scaleMasterCanvasForDpi(master, ptWidth, ptHeight, tier.dpi);
-          applyColorFilter(canvas, settings.colorMode);
-          const frames: RenderedPageFrame[] = [{ canvas, ptWidth, ptHeight }];
-
-          const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
-          disposeFrames(frames);
-
-          if (solved.fits || idx === schedule.length - 1) {
-            chosenBytes = solved.arrayBuf;
-            chosenBlob = solved.firstPageBlob;
-            chosenDpi = tier.dpi;
-            withinLimit = solved.fits;
-            break;
-          }
-        }
-
-        if (chosenBytes && chosenBlob) {
-          outputs.push({
-            id: `${base}_p${p}_${crypto.randomUUID().slice(0, 6)}`,
-            pageNum: p,
-            name: `${base}_page_${p}.pdf`,
-            bytes: chosenBytes,
-            previewUrl: URL.createObjectURL(chosenBlob),
-            dpi: chosenDpi,
-            withinLimit,
-          });
-        }
-      }
-
-      return { totalPages, outputs };
-    }
-
-    // Merged mode for DOC/DOCX
-    const schedule = selectDpiSchedule(maxSizeBytes, totalPages);
-    let finalBytes: ArrayBuffer | null = null;
-    let firstPagePreviewBlob: Blob | null = null;
-    let finalDpi = schedule[schedule.length - 1].dpi;
-    let withinLimit = false;
-
-    for (let idx = 0; idx < schedule.length; idx++) {
-      const tier = schedule[idx];
-      const frames: RenderedPageFrame[] = [];
-
-      for (let i = 0; i < totalPages; i++) {
-        onProgress(i + 1, totalPages);
-        await yieldFrame();
-
-        const master = masterCanvases[i];
-        const ptWidth = master.width > master.height ? 841.89 : 595.28;
-        const ptHeight = Math.max(200, (ptWidth * master.height) / master.width);
-        const canvas = scaleMasterCanvasForDpi(master, ptWidth, ptHeight, tier.dpi);
-        applyColorFilter(canvas, settings.colorMode);
-        frames.push({ canvas, ptWidth, ptHeight });
-      }
-
-      const solved = await solveQualityForFrames(frames, tier.highQ, tier.lowQ, maxSizeBytes);
-      disposeFrames(frames);
-
-      if (solved.fits || idx === schedule.length - 1) {
-        finalBytes = solved.arrayBuf;
-        firstPagePreviewBlob = solved.firstPageBlob;
-        finalDpi = tier.dpi;
-        withinLimit = solved.fits;
-        break;
-      }
-    }
-
-    const outputs: PageOutput[] = [];
-    if (finalBytes && firstPagePreviewBlob) {
-      outputs.push({
-        id: `${base}_merged_${crypto.randomUUID().slice(0, 6)}`,
-        pageNum: 1,
-        pageCount: totalPages,
-        name: `${base}.pdf`,
-        bytes: finalBytes,
-        previewUrl: URL.createObjectURL(firstPagePreviewBlob),
-        dpi: finalDpi,
-        withinLimit,
-        isMergedDocument: true,
-      });
-    }
-
-    return { totalPages, outputs };
-  } finally {
-    for (const c of masterCanvases) {
-      c.width = 0;
-      c.height = 0;
-    }
-  }
-}
-
 export async function convertPdfDocument(
   file: File,
   settings: ConversionSettings,
   onProgress: (currentPage: number, totalPages: number) => void,
 ): Promise<{ totalPages: number; outputs: PageOutput[] }> {
-  if (isWordFile(file)) {
-    const canvases = await renderWordFileToCanvases(file);
-    return convertCanvasesToPdfDocument(canvases, file, settings, onProgress);
-  }
-
+  const fromWord = isWordFile(file);
   const fromExcel = isExcelFile(file);
   let doc: PDFDocumentProxy | null = null;
   let loadingTask: ReturnType<typeof pdfjsLib.getDocument> | null = null;
@@ -461,7 +315,9 @@ export async function convertPdfDocument(
   try {
     const buffer = fromExcel
       ? await convertExcelToIntermediatePdf(file)
-      : new Uint8Array(await file.arrayBuffer());
+      : fromWord
+        ? await convertWordToIntermediatePdf(file)
+        : new Uint8Array(await file.arrayBuffer());
     loadingTask = pdfjsLib.getDocument({
       data: buffer,
       useSystemFonts: true,
@@ -588,7 +444,7 @@ export async function convertPdfDocument(
         id: `${base}_merged_${crypto.randomUUID().slice(0, 6)}`,
         pageNum: 1,
         pageCount: totalPages,
-        name: fromExcel ? `${base}.pdf` : `${base}_optimized.pdf`,
+        name: fromExcel || fromWord ? `${base}.pdf` : `${base}_optimized.pdf`,
         bytes: finalBytes,
         previewUrl: URL.createObjectURL(firstPagePreviewBlob),
         dpi: finalDpi,
