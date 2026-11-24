@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { Header } from './components/Header';
 import { PreviewModal } from './components/PreviewModal';
 import { QueuePanel } from './components/QueuePanel';
@@ -195,6 +196,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+      <SpeedInsights />
       <Header lang={lang} onLangChange={setLang} t={t} />
 
       <main id="converter" className="flex-1">
