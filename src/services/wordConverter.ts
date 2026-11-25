@@ -150,6 +150,11 @@ function twipsToPt(val: string | null | undefined, fallback = 0): number {
   return Number.isFinite(num) ? num / 20 : fallback;
 }
 
+function calibrateDocxFontSize(pt: number): number {
+  // Roboto glyphs are ~6% wider than Word's default Calibri; gentle scaling keeps headings/lines matching Word breaks
+  return Number(Math.max(6.5, pt * 0.94).toFixed(1));
+}
+
 function halfPtToPt(val: string | null | undefined): number | undefined {
   if (!val) return undefined;
   const num = Number(val);
@@ -160,6 +165,12 @@ function emuToPt(val: string | null | undefined): number | undefined {
   if (!val) return undefined;
   const num = Number(val);
   return Number.isFinite(num) && num > 0 ? num / 12700 : undefined;
+}
+
+function emuToSignedPt(val: string | null | undefined): number | undefined {
+  if (val === null || val === undefined || val === '') return undefined;
+  const num = Number(val);
+  return Number.isFinite(num) ? num / 12700 : undefined;
 }
 
 function normalizeHexColor(val: string | null | undefined): string | undefined {
@@ -284,7 +295,7 @@ function parseRunStyle(rPr: Element | null | undefined): RunStyle {
 
   const szEl = firstChild(rPr, 'sz');
   const szPt = halfPtToPt(getAttr(szEl, 'val'));
-  if (szPt) style.fontSize = szPt;
+  if (szPt) style.fontSize = calibrateDocxFontSize(szPt);
 
   const colorEl = firstChild(rPr, 'color');
   const color = normalizeHexColor(getAttr(colorEl, 'val'));
@@ -472,7 +483,7 @@ function mergeParagraphStyle(base: ParagraphStyle, over?: ParagraphStyle): Parag
 
 async function parseStylesXml(zip: JSZip): Promise<StylesContext> {
   const ctx: StylesContext = {
-    defaultRun: { fontSize: 10.5, color: '#0f172a' },
+    defaultRun: { fontSize: calibrateDocxFontSize(10.5), color: '#0f172a' },
     defaultParagraph: { alignment: 'left', spaceBefore: 0, spaceAfter: 4, lineHeight: 1.16 },
     styles: new Map(),
   };
@@ -736,6 +747,26 @@ async function loadImageAsPdfMakeDataUri(
 /* OOXML Paragraph, Image & Table Builders                                    */
 /* -------------------------------------------------------------------------- */
 
+interface AnchorSpec {
+  behindDoc?: boolean;
+  posHRel?: string;
+  posHXPt?: number;
+  alignH?: string;
+  posVRel?: string;
+  posVYPt?: number;
+  alignV?: string;
+}
+
+interface PageGeometry {
+  pageWidthPt: number;
+  pageHeightPt: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  usableWidthPt: number;
+}
+
 interface RunToken {
   kind: 'text' | 'tab' | 'pageBreak' | 'image';
   text?: string;
@@ -743,6 +774,7 @@ interface RunToken {
   imageUri?: string;
   widthPt?: number;
   heightPt?: number;
+  anchor?: AnchorSpec;
 }
 
 interface ParsedParagraphResult {
@@ -757,15 +789,22 @@ interface BuildContext {
   numbering: NumberingMap;
   numCounters: Map<string, number>;
   imageCache: Map<string, string | null>;
+  page: PageGeometry;
 }
 
-function parseVmlDimensionPt(styleStr: string | null, prop: 'width' | 'height'): number | undefined {
+function parseVmlDimensionPt(
+  styleStr: string | null,
+  prop: string,
+  allowSigned = false,
+): number | undefined {
   if (!styleStr) return undefined;
-  const regex = new RegExp(`${prop}\\s*:\\s*([0-9.]+)(pt|px|in|cm|mm)?`, 'i');
+  const escapedProp = prop.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*(-?[0-9.]+)(pt|px|in|cm|mm)?`, 'i');
   const m = styleStr.match(regex);
   if (!m) return undefined;
   const val = Number(m[1]);
-  if (!Number.isFinite(val) || val <= 0) return undefined;
+  if (!Number.isFinite(val)) return undefined;
+  if (!allowSigned && val <= 0) return undefined;
   const unit = (m[2] ?? 'pt').toLowerCase();
   if (unit === 'pt') return val;
   if (unit === 'px') return val * 0.75;
@@ -773,6 +812,75 @@ function parseVmlDimensionPt(styleStr: string | null, prop: 'width' | 'height'):
   if (unit === 'cm') return val * 28.3465;
   if (unit === 'mm') return val * 2.83465;
   return val;
+}
+
+function parseVmlCssText(styleStr: string | null, prop: string): string | undefined {
+  if (!styleStr) return undefined;
+  const escapedProp = prop.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, 'i');
+  const m = styleStr.match(regex);
+  return m ? m[1].trim().toLowerCase() : undefined;
+}
+
+async function extractImagesFromDrawing(
+  drawingEl: Element,
+  rels: Map<string, RelEntry>,
+  partDir: string,
+  bctx: BuildContext,
+): Promise<RunToken[]> {
+  const tokens: RunToken[] = [];
+  const anchorEl = firstChild(drawingEl, 'anchor');
+  const inlineEl = firstChild(drawingEl, 'inline');
+  const frameEl = anchorEl ?? inlineEl;
+
+  const extEl = firstChild(frameEl, 'extent') ?? findDescendants(drawingEl, 'extent')[0];
+  const wPt = emuToPt(getAttr(extEl, 'cx')) ?? 140;
+  const hPt = emuToPt(getAttr(extEl, 'cy')) ?? 60;
+
+  let anchor: AnchorSpec | undefined;
+  if (anchorEl) {
+    const positionH = firstChild(anchorEl, 'positionH');
+    const positionV = firstChild(anchorEl, 'positionV');
+    const posHRel = (getAttr(positionH, 'relativeFrom') ?? 'column').toLowerCase();
+    const posVRel = (getAttr(positionV, 'relativeFrom') ?? 'paragraph').toLowerCase();
+    const posHXPt = emuToSignedPt(firstChild(positionH, 'posOffset')?.textContent?.trim());
+    const posVYPt = emuToSignedPt(firstChild(positionV, 'posOffset')?.textContent?.trim());
+    const alignH = firstChild(positionH, 'align')?.textContent?.trim().toLowerCase();
+    const alignV = firstChild(positionV, 'align')?.textContent?.trim().toLowerCase();
+    const behindAttr = (getAttr(anchorEl, 'behindDoc') ?? '').toLowerCase();
+    const behindDoc = behindAttr === '1' || behindAttr === 'true';
+
+    anchor = {
+      behindDoc,
+      posHRel,
+      posHXPt,
+      alignH,
+      posVRel,
+      posVYPt,
+      alignV,
+    };
+  }
+
+  const blips = findDescendants(drawingEl, 'blip');
+  for (const blip of blips) {
+    const rId = getAttr(blip, 'embed') ?? getAttr(blip, 'link');
+    if (!rId) continue;
+    const rel = rels.get(rId);
+    if (!rel) continue;
+    const imgPath = resolveZipTarget(partDir, rel.target);
+    const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
+    if (dataUri) {
+      tokens.push({
+        kind: 'image',
+        imageUri: dataUri,
+        widthPt: wPt,
+        heightPt: hPt,
+        anchor,
+      });
+    }
+  }
+
+  return tokens;
 }
 
 async function extractRunTokens(
@@ -802,7 +910,7 @@ async function extractRunTokens(
         if (txt.length > 0) {
           tokens.push({ kind: 'text', text: txt, style: finalStyle });
         }
-      } else if (tag === 'tab') {
+      } else if (tag === 'tab' || tag === 'ptab') {
         tokens.push({ kind: 'tab', style: finalStyle });
       } else if (tag === 'br') {
         const brType = (getAttr(child, 'type') ?? '').toLowerCase();
@@ -816,29 +924,40 @@ async function extractRunTokens(
       } else if (tag === 'noBreakHyphen') {
         tokens.push({ kind: 'text', text: '-', style: finalStyle });
       } else if (tag === 'drawing') {
-        const blips = findDescendants(child, 'blip');
-        const extents = findDescendants(child, 'extent');
-        const ext = extents[0];
-        const wPt = emuToPt(getAttr(ext, 'cx')) ?? 140;
-        const hPt = emuToPt(getAttr(ext, 'cy')) ?? 60;
-
-        for (const blip of blips) {
-          const rId = getAttr(blip, 'embed') ?? getAttr(blip, 'link');
-          if (!rId) continue;
-          const rel = rels.get(rId);
-          if (!rel) continue;
-          const imgPath = resolveZipTarget(partDir, rel.target);
-          const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
-          if (dataUri) {
-            tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
-          }
-        }
+        tokens.push(...(await extractImagesFromDrawing(child, rels, partDir, bctx)));
       } else if (tag === 'pict') {
         const imagedatas = findDescendants(child, 'imagedata');
-        const shape = firstChild(child, 'shape') ?? child;
+        const shape =
+          firstChild(child, 'shape') ??
+          directChildren(child).find((el) => localNameOf(el) !== 'shapetype') ??
+          child;
         const shapeStyle = getAttr(shape, 'style');
         const wPt = parseVmlDimensionPt(shapeStyle, 'width') ?? 140;
         const hPt = parseVmlDimensionPt(shapeStyle, 'height') ?? 60;
+
+        let anchor: AnchorSpec | undefined;
+        if (parseVmlCssText(shapeStyle, 'position') === 'absolute') {
+          const zIdx = Number(parseVmlCssText(shapeStyle, 'z-index') ?? '0');
+          const posHXPt =
+            parseVmlDimensionPt(shapeStyle, 'margin-left', true) ??
+            parseVmlDimensionPt(shapeStyle, 'left', true);
+          const posVYPt =
+            parseVmlDimensionPt(shapeStyle, 'margin-top', true) ??
+            parseVmlDimensionPt(shapeStyle, 'top', true);
+          const alignH = parseVmlCssText(shapeStyle, 'mso-position-horizontal');
+          const alignV = parseVmlCssText(shapeStyle, 'mso-position-vertical');
+          const relH = parseVmlCssText(shapeStyle, 'mso-position-horizontal-relative') ?? 'column';
+          const relV = parseVmlCssText(shapeStyle, 'mso-position-vertical-relative') ?? 'paragraph';
+          anchor = {
+            behindDoc: Number.isFinite(zIdx) && zIdx < 0,
+            posHRel: relH === 'text' ? 'column' : relH,
+            posHXPt,
+            alignH,
+            posVRel: relV === 'text' ? 'paragraph' : relV,
+            posVYPt,
+            alignV,
+          };
+        }
 
         for (const im of imagedatas) {
           const rId = getAttr(im, 'id');
@@ -848,28 +967,20 @@ async function extractRunTokens(
           const imgPath = resolveZipTarget(partDir, rel.target);
           const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
           if (dataUri) {
-            tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
+            tokens.push({
+              kind: 'image',
+              imageUri: dataUri,
+              widthPt: wPt,
+              heightPt: hPt,
+              anchor,
+            });
           }
         }
       } else if (tag === 'AlternateContent') {
         const choice = firstChild(child, 'Choice') ?? firstChild(child, 'Fallback');
         if (choice) {
           for (const subDrawing of findDescendants(choice, 'drawing')) {
-            const blips = findDescendants(subDrawing, 'blip');
-            const ext = findDescendants(subDrawing, 'extent')[0];
-            const wPt = emuToPt(getAttr(ext, 'cx')) ?? 140;
-            const hPt = emuToPt(getAttr(ext, 'cy')) ?? 60;
-            for (const blip of blips) {
-              const rId = getAttr(blip, 'embed') ?? getAttr(blip, 'link');
-              if (!rId) continue;
-              const rel = rels.get(rId);
-              if (!rel) continue;
-              const imgPath = resolveZipTarget(partDir, rel.target);
-              const dataUri = await loadImageAsPdfMakeDataUri(bctx.zip, imgPath, bctx.imageCache);
-              if (dataUri) {
-                tokens.push({ kind: 'image', imageUri: dataUri, widthPt: wPt, heightPt: hPt });
-              }
-            }
+            tokens.push(...(await extractImagesFromDrawing(subDrawing, rels, partDir, bctx)));
           }
         }
       }
@@ -950,6 +1061,185 @@ function nextListPrefix(pStyle: ParagraphStyle, bctx: BuildContext): string | nu
   return `${count}. `;
 }
 
+function buildAnchoredImageNode(
+  tok: RunToken,
+  bctx: BuildContext,
+  paraLeftMargin: number,
+  insideCell: boolean,
+): Content {
+  const page = bctx.page;
+  const anchor = tok.anchor ?? {};
+  let w = tok.widthPt ?? 120;
+  let h = tok.heightPt ?? 60;
+  const maxAllowedW = Math.max(40, page.pageWidthPt - 16);
+  if (w > maxAllowedW) {
+    const s = maxAllowedW / w;
+    w = maxAllowedW;
+    h *= s;
+  }
+
+  const relH = (anchor.posHRel ?? 'column').toLowerCase();
+  let originX = page.marginLeft;
+  let regionW = page.usableWidthPt;
+  if (relH === 'page') {
+    originX = 0;
+    regionW = page.pageWidthPt;
+  } else if (relH === 'leftmargin') {
+    originX = 0;
+    regionW = page.marginLeft;
+  } else if (relH === 'rightmargin' || relH === 'outsidemargin') {
+    originX = page.pageWidthPt - page.marginRight;
+    regionW = page.marginRight;
+  } else if (relH === 'character') {
+    originX = page.marginLeft + paraLeftMargin;
+    regionW = Math.max(40, page.usableWidthPt - paraLeftMargin);
+  }
+
+  let absX: number;
+  if (anchor.posHXPt !== undefined) {
+    absX = originX + anchor.posHXPt;
+  } else if (anchor.alignH === 'right' || anchor.alignH === 'outside') {
+    absX = originX + regionW - w;
+  } else if (anchor.alignH === 'center') {
+    absX = originX + (regionW - w) / 2;
+  } else {
+    absX = originX;
+  }
+  absX = Math.max(4, Math.min(page.pageWidthPt - w - 4, absX));
+
+  const relV = (anchor.posVRel ?? 'paragraph').toLowerCase();
+  const isPageVertical =
+    relV === 'page' ||
+    relV === 'margin' ||
+    relV === 'topmargin' ||
+    relV === 'bottommargin' ||
+    relV === 'insidemargin' ||
+    relV === 'outsidemargin';
+
+  if (isPageVertical) {
+    let originY = page.marginTop;
+    let regionH = Math.max(40, page.pageHeightPt - page.marginTop - page.marginBottom);
+    if (relV === 'page') {
+      originY = 0;
+      regionH = page.pageHeightPt;
+    } else if (relV === 'topmargin') {
+      originY = 0;
+      regionH = page.marginTop;
+    } else if (relV === 'bottommargin') {
+      originY = page.pageHeightPt - page.marginBottom;
+      regionH = page.marginBottom;
+    }
+
+    let absY: number;
+    if (anchor.posVYPt !== undefined) {
+      absY = originY + anchor.posVYPt;
+    } else if (anchor.alignV === 'bottom') {
+      absY = originY + regionH - h;
+    } else if (anchor.alignV === 'center') {
+      absY = originY + (regionH - h) / 2;
+    } else {
+      absY = originY;
+    }
+    absY = Math.max(4, Math.min(page.pageHeightPt - h - 4, absY));
+
+    return {
+      image: tok.imageUri!,
+      width: Number(w.toFixed(1)),
+      height: Number(h.toFixed(1)),
+      absolutePosition: {
+        x: Number(absX.toFixed(1)),
+        y: Number(absY.toFixed(1)),
+      },
+    };
+  }
+
+  // Paragraph / line relative anchor: pdfmake detached block starts at (page.marginLeft, currentY) at top level
+  const relX = insideCell
+    ? (anchor.posHXPt ?? 0)
+    : absX - page.marginLeft;
+  const relY = Math.max(-350, Math.min(500, anchor.posVYPt ?? 0));
+
+  return {
+    image: tok.imageUri!,
+    width: Number(w.toFixed(1)),
+    height: Number(h.toFixed(1)),
+    relativePosition: {
+      x: Number(relX.toFixed(1)),
+      y: Number(relY.toFixed(1)),
+    },
+  };
+}
+
+function splitSpansOnWideSpaceGap(spans: any[]): [any[], any[]] | null {
+  const fullText = spans.map((s) => s.text ?? '').join('');
+  if (fullText.includes('\n')) return null;
+
+  const match = fullText.match(/^(.+?\S)([ \u00A0]{6,})(\S.*)$/);
+  if (!match) return null;
+
+  const leftStr = match[1];
+  const gapLen = match[2].length;
+  const rightStr = match[3];
+  if (leftStr.trim().length < 2 || rightStr.trim().length === 0 || rightStr.trim().length > 42) {
+    return null;
+  }
+
+  const gapStart = leftStr.length;
+  const gapEnd = gapStart + gapLen;
+
+  const leftSpans: any[] = [];
+  const rightSpans: any[] = [];
+  let cursor = 0;
+
+  for (const span of spans) {
+    const txt: string = span.text ?? '';
+    const spanStart = cursor;
+    const spanEnd = cursor + txt.length;
+    cursor = spanEnd;
+
+    if (spanEnd <= gapStart) {
+      leftSpans.push({ ...span });
+    } else if (spanStart >= gapEnd) {
+      rightSpans.push({ ...span });
+    } else {
+      if (spanStart < gapStart) {
+        const part = txt.slice(0, gapStart - spanStart);
+        if (part.length > 0) leftSpans.push({ ...span, text: part });
+      }
+      if (spanEnd > gapEnd) {
+        const part = txt.slice(gapEnd - spanStart);
+        if (part.length > 0) rightSpans.push({ ...span, text: part });
+      }
+    }
+  }
+
+  return leftSpans.length > 0 && rightSpans.length > 0 ? [leftSpans, rightSpans] : null;
+}
+
+function attachAnchoredImages(
+  baseResult: ParsedParagraphResult,
+  anchoredNodes: Content[],
+): ParsedParagraphResult {
+  if (anchoredNodes.length === 0 || !baseResult.content) {
+    return baseResult;
+  }
+
+  const baseAny = baseResult.content as any;
+  const hoistedPageBreak = baseAny.pageBreak === 'before' ? ('before' as const) : undefined;
+  if (hoistedPageBreak) {
+    delete baseAny.pageBreak;
+  }
+
+  return {
+    content: {
+      stack: [...anchoredNodes, baseResult.content],
+      ...(hoistedPageBreak ? { pageBreak: hoistedPageBreak } : {}),
+    },
+    estimatedHeightPt: baseResult.estimatedHeightPt,
+    hasPageBreak: baseResult.hasPageBreak,
+  };
+}
+
 async function buildParagraphContent(
   pEl: Element,
   maxWidthPt: number,
@@ -984,20 +1274,56 @@ async function buildParagraphContent(
     }
   }
 
-  const baseFontSize = pStyle.runStyle?.fontSize ?? 10.5;
+  const baseFontSize = pStyle.runStyle?.fontSize ?? 9.9;
   const lineHeight = pStyle.lineHeight ?? 1.16;
   const spaceBefore = insideCell ? Math.min(pStyle.spaceBefore ?? 0, 2) : (pStyle.spaceBefore ?? 0);
   const spaceAfter = insideCell
     ? Math.min(pStyle.spaceAfter ?? 1, 2.5)
     : (pStyle.spaceAfter ?? 3);
 
-  const images = cleanTokens.filter((t) => t.kind === 'image');
+  const inlineImages = cleanTokens.filter((t) => t.kind === 'image' && !t.anchor);
+  const anchoredImages = cleanTokens.filter((t) => t.kind === 'image' && Boolean(t.anchor));
   const hasVisibleText = cleanTokens.some(
     (t) => t.kind === 'text' && (t.text ?? '').replace(/\s+/g, '').length > 0,
   );
 
+  const listPrefix = nextListPrefix(pStyle, bctx);
+  let leftMargin = insideCell ? 0 : (pStyle.indentLeft ?? 0);
+  const rightMargin = insideCell ? 0 : (pStyle.indentRight ?? 0);
+  if (!insideCell && pStyle.numId) {
+    leftMargin += 14 * ((pStyle.ilvl ?? 0) + 1);
+  }
+
+  // Clamp horizontal margins so narrow columns never collapse
+  if (leftMargin + rightMargin > maxWidthPt * 0.55) {
+    leftMargin = Math.min(leftMargin, maxWidthPt * 0.35);
+  }
+
+  const availableW = Math.max(30, maxWidthPt - leftMargin - rightMargin);
+
+  const anchoredNodes: Content[] = anchoredImages.map((im) =>
+    buildAnchoredImageNode(im, bctx, leftMargin, insideCell),
+  );
+
+  // Empty paragraph containing only floating anchored image(s)
+  if (!hasVisibleText && inlineImages.length === 0 && anchoredNodes.length > 0) {
+    const wrapped: Content =
+      anchoredNodes.length === 1 && !hasPageBreak && !foundInlinePageBreak && !hasFollowingPageBreak
+        ? anchoredNodes[0]
+        : {
+            stack: anchoredNodes,
+            ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+            ...(foundInlinePageBreak || hasFollowingPageBreak ? { pageBreak: 'after' as const } : {}),
+          };
+    return {
+      content: wrapped,
+      estimatedHeightPt: 0,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    };
+  }
+
   // Empty spacer paragraph
-  if (!hasVisibleText && images.length === 0) {
+  if (!hasVisibleText && inlineImages.length === 0) {
     if (foundInlinePageBreak || hasPageBreak || hasFollowingPageBreak) {
       return {
         content: {
@@ -1018,23 +1344,9 @@ async function buildParagraphContent(
     };
   }
 
-  const listPrefix = nextListPrefix(pStyle, bctx);
-  let leftMargin = insideCell ? 0 : (pStyle.indentLeft ?? 0);
-  const rightMargin = insideCell ? 0 : (pStyle.indentRight ?? 0);
-  if (!insideCell && pStyle.numId) {
-    leftMargin += 14 * ((pStyle.ilvl ?? 0) + 1);
-  }
-
-  // Clamp horizontal margins so narrow columns never collapse
-  if (leftMargin + rightMargin > maxWidthPt * 0.55) {
-    leftMargin = Math.min(leftMargin, maxWidthPt * 0.35);
-  }
-
-  const availableW = Math.max(30, maxWidthPt - leftMargin - rightMargin);
-
-  // Pure image paragraph (common for company logos in header or body)
-  if (!hasVisibleText && images.length > 0) {
-    const imgItems: Content[] = images.map((im, idx) => {
+  // Pure inline image paragraph (common for company logos in header or body)
+  if (!hasVisibleText && inlineImages.length > 0) {
+    const imgItems: Content[] = inlineImages.map((im, idx) => {
       let w = im.widthPt ?? 120;
       let h = im.heightPt ?? 60;
       if (w > availableW) {
@@ -1051,22 +1363,25 @@ async function buildParagraphContent(
           leftMargin,
           idx === 0 ? spaceBefore : 2,
           rightMargin,
-          idx === images.length - 1 ? spaceAfter : 2,
+          idx === inlineImages.length - 1 ? spaceAfter : 2,
         ],
         ...(hasPageBreak && idx === 0 ? { pageBreak: 'before' as const } : {}),
       };
     });
 
     const totalImgH = imgItems.reduce((sum: number, item: any) => sum + (item.height ?? 40), 0);
-    return {
-      content: imgItems.length === 1 ? imgItems[0] : { stack: imgItems },
-      estimatedHeightPt: totalImgH + spaceBefore + spaceAfter,
-      hasPageBreak: hasPageBreak || foundInlinePageBreak,
-    };
+    return attachAnchoredImages(
+      {
+        content: imgItems.length === 1 ? imgItems[0] : { stack: imgItems },
+        estimatedHeightPt: totalImgH + spaceBefore + spaceAfter,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
+      },
+      anchoredNodes,
+    );
   }
 
   // Paragraph contains inline image(s) alongside text: emit stack of text + images safely
-  if (images.length > 0) {
+  if (inlineImages.length > 0) {
     const stackItems: Content[] = [];
     let currentSpans: any[] = [];
     let estH = spaceBefore + spaceAfter;
@@ -1093,7 +1408,7 @@ async function buildParagraphContent(
         currentSpans.push(buildTextSpan(tok.text, tok.style));
       } else if (tok.kind === 'tab') {
         currentSpans.push(buildTextSpan('   ', tok.style));
-      } else if (tok.kind === 'image' && tok.imageUri) {
+      } else if (tok.kind === 'image' && !tok.anchor && tok.imageUri) {
         flushSpans();
         let w = tok.widthPt ?? 120;
         let h = tok.heightPt ?? 60;
@@ -1114,15 +1429,18 @@ async function buildParagraphContent(
     }
     flushSpans();
 
-    return {
-      content: {
-        stack: stackItems,
-        margin: [0, spaceBefore, 0, spaceAfter],
-        ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+    return attachAnchoredImages(
+      {
+        content: {
+          stack: stackItems,
+          margin: [0, spaceBefore, 0, spaceAfter],
+          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+        },
+        estimatedHeightPt: estH,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
       },
-      estimatedHeightPt: estH,
-      hasPageBreak: hasPageBreak || foundInlinePageBreak,
-    };
+      anchoredNodes,
+    );
   }
 
   // Split text tokens into tab-separated groups
@@ -1156,18 +1474,21 @@ async function buildParagraphContent(
     const totalChars = spans.map((s) => s.text).join('').length;
     const estLines = Math.max(1, Math.ceil((totalChars * baseFontSize * 0.52) / Math.max(40, availableW - extraIndent)));
 
-    return {
-      content: {
-        text: spans,
-        fontSize: Number(baseFontSize.toFixed(1)),
-        lineHeight,
-        alignment: pStyle.alignment ?? 'left',
-        margin: [extraIndent, spaceBefore, rightMargin, spaceAfter],
-        ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+    return attachAnchoredImages(
+      {
+        content: {
+          text: spans,
+          fontSize: Number(baseFontSize.toFixed(1)),
+          lineHeight,
+          alignment: pStyle.alignment ?? 'left',
+          margin: [extraIndent, spaceBefore, rightMargin, spaceAfter],
+          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+        },
+        estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
       },
-      estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
-      hasPageBreak: hasPageBreak || foundInlinePageBreak,
-    };
+      anchoredNodes,
+    );
   }
 
   // Signature / multi-column tab lines at top level (e.g. "Директор ПП «Будпостач» \t Шитлін Д.В.")
@@ -1180,50 +1501,96 @@ async function buildParagraphContent(
       const rightTab = pStyle.tabs?.[pStyle.tabs.length - 1];
       const rightAlign =
         rightTab?.val === 'center' ? 'center' : 'right';
-      return {
-        content: {
-          columns: [
-            {
-              width: '*',
-              text: activeGroups[0],
-              fontSize: Number(baseFontSize.toFixed(1)),
-              lineHeight,
-              alignment: 'left',
-            },
-            {
-              width: 'auto',
-              text: activeGroups[1],
-              fontSize: Number(baseFontSize.toFixed(1)),
-              lineHeight,
-              alignment: rightAlign,
-            },
-          ],
-          columnGap: 12,
-          margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
-          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+      return attachAnchoredImages(
+        {
+          content: {
+            columns: [
+              {
+                width: '*',
+                text: activeGroups[0],
+                fontSize: Number(baseFontSize.toFixed(1)),
+                lineHeight,
+                alignment: 'left',
+              },
+              {
+                width: 'auto',
+                text: activeGroups[1],
+                fontSize: Number(baseFontSize.toFixed(1)),
+                lineHeight,
+                alignment: rightAlign,
+              },
+            ],
+            columnGap: 12,
+            margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+            ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+          },
+          estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
+          hasPageBreak: hasPageBreak || foundInlinePageBreak,
         },
-        estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
-        hasPageBreak: hasPageBreak || foundInlinePageBreak,
-      };
+        anchoredNodes,
+      );
     }
 
     if (activeGroups.length >= 3) {
-      return {
-        content: {
-          columns: activeGroups.map((grp, i) => ({
-            width: '*',
-            text: grp,
-            fontSize: Number(baseFontSize.toFixed(1)),
-            lineHeight,
-            alignment: i === activeGroups.length - 1 ? 'right' : 'left',
-          })),
-          columnGap: 8,
-          margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
-          ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+      return attachAnchoredImages(
+        {
+          content: {
+            columns: activeGroups.map((grp, i) => ({
+              width: '*',
+              text: grp,
+              fontSize: Number(baseFontSize.toFixed(1)),
+              lineHeight,
+              alignment: i === activeGroups.length - 1 ? 'right' : 'left',
+            })),
+            columnGap: 8,
+            margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+            ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+          },
+          estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
+          hasPageBreak: hasPageBreak || foundInlinePageBreak,
         },
-        estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
-        hasPageBreak: hasPageBreak || foundInlinePageBreak,
-      };
+        anchoredNodes,
+      );
+    }
+  }
+
+  // Handle manual space-aligned two-part lines (e.g. "To: PE «BUDPOSTACH»        25.11.2026")
+  if (
+    !insideCell &&
+    !listPrefix &&
+    nonEmptyGroupIndices.length === 1 &&
+    (pStyle.alignment ?? 'left') === 'left'
+  ) {
+    const spaceSplit = splitSpansOnWideSpaceGap(tabGroups[nonEmptyGroupIndices[0]]);
+    if (spaceSplit) {
+      return attachAnchoredImages(
+        {
+          content: {
+            columns: [
+              {
+                width: '*',
+                text: spaceSplit[0],
+                fontSize: Number(baseFontSize.toFixed(1)),
+                lineHeight,
+                alignment: 'left',
+              },
+              {
+                width: 'auto',
+                text: spaceSplit[1],
+                fontSize: Number(baseFontSize.toFixed(1)),
+                lineHeight,
+                alignment: 'right',
+              },
+            ],
+            columnGap: 12,
+            margin: [leftMargin, spaceBefore, rightMargin, spaceAfter],
+            ...(hasPageBreak ? { pageBreak: 'before' as const } : {}),
+          },
+          estimatedHeightPt: baseFontSize * lineHeight + spaceBefore + spaceAfter,
+          hasPageBreak: hasPageBreak || foundInlinePageBreak,
+        },
+        anchoredNodes,
+      );
     }
   }
 
@@ -1264,36 +1631,42 @@ async function buildParagraphContent(
   }
 
   if (pStyle.bottomBorder) {
-    return {
-      content: {
-        stack: [
-          node,
-          {
-            canvas: [
-              {
-                type: 'line',
-                x1: leftMargin,
-                y1: 0,
-                x2: maxWidthPt - rightMargin,
-                y2: 0,
-                lineWidth: pStyle.bottomBorder.width,
-                lineColor: pStyle.bottomBorder.color,
-              },
-            ],
-            margin: [0, 1, 0, Math.max(2, spaceAfter)],
-          },
-        ],
+    return attachAnchoredImages(
+      {
+        content: {
+          stack: [
+            node,
+            {
+              canvas: [
+                {
+                  type: 'line',
+                  x1: leftMargin,
+                  y1: 0,
+                  x2: maxWidthPt - rightMargin,
+                  y2: 0,
+                  lineWidth: pStyle.bottomBorder.width,
+                  lineColor: pStyle.bottomBorder.color,
+                },
+              ],
+              margin: [0, 1, 0, Math.max(2, spaceAfter)],
+            },
+          ],
+        },
+        estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter + 4,
+        hasPageBreak: hasPageBreak || foundInlinePageBreak,
       },
-      estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter + 4,
-      hasPageBreak: hasPageBreak || foundInlinePageBreak,
-    };
+      anchoredNodes,
+    );
   }
 
-  return {
-    content: node,
-    estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
-    hasPageBreak: hasPageBreak || foundInlinePageBreak,
-  };
+  return attachAnchoredImages(
+    {
+      content: node,
+      estimatedHeightPt: estLines * baseFontSize * lineHeight + spaceBefore + spaceAfter,
+      hasPageBreak: hasPageBreak || foundInlinePageBreak,
+    },
+    anchoredNodes,
+  );
 }
 
 interface TableCellData {
@@ -1763,15 +2136,6 @@ async function convertDocxToPdfBytes(buffer: ArrayBuffer): Promise<Uint8Array> {
     parseRelsFile(zip, 'word/_rels/document.xml.rels'),
   ]);
 
-  const bctx: BuildContext = {
-    zip,
-    styles,
-    numbering,
-    numCounters: new Map(),
-    imageCache: new Map(),
-  };
-
-  // Extract section properties (page size, margins, header/footer references)
   const sectPrList = directChildren(bodyEl, 'sectPr');
   const sectPr = sectPrList[sectPrList.length - 1] ?? findDescendants(bodyEl, 'sectPr').pop() ?? null;
 
@@ -1794,6 +2158,23 @@ async function convertDocxToPdfBytes(buffer: ArrayBuffer): Promise<Uint8Array> {
   const footerBottomOffset = Math.max(12, Math.min(48, twipsToPt(getAttr(pgMarEl, 'footer'), 20)));
 
   const usableWidthPt = Math.max(200, pageWidthPt - marginLeft - marginRight);
+
+  const bctx: BuildContext = {
+    zip,
+    styles,
+    numbering,
+    numCounters: new Map(),
+    imageCache: new Map(),
+    page: {
+      pageWidthPt,
+      pageHeightPt,
+      marginLeft,
+      marginRight,
+      marginTop,
+      marginBottom,
+      usableWidthPt,
+    },
+  };
 
   // Parse headers & footers referenced by sectPr
   const headerRefs = sectPr ? directChildren(sectPr, 'headerReference') : [];
@@ -1848,6 +2229,9 @@ async function convertDocxToPdfBytes(buffer: ArrayBuffer): Promise<Uint8Array> {
   if (maxFooterHeight > 0) {
     marginBottom = Math.max(marginBottom, Math.ceil(footerBottomOffset + maxFooterHeight + 10));
   }
+
+  bctx.page.marginTop = marginTop;
+  bctx.page.marginBottom = marginBottom;
 
   const bodyParsed = await parseBlockElements(bodyEl, usableWidthPt, docRels, 'word', bctx);
 
