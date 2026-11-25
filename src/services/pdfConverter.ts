@@ -12,8 +12,17 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
-const PDFJS_CMAP_URL = '/pdfjs/cmaps/';
-const PDFJS_STANDARD_FONT_URL = '/pdfjs/standard_fonts/';
+function resolvePublicPdfjsPath(subPath: string): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return new URL(subPath, window.location.origin).toString();
+  }
+  return subPath;
+}
+
+const PDFJS_CMAP_URL = resolvePublicPdfjsPath('/pdfjs/cmaps/');
+const PDFJS_STANDARD_FONT_URL = resolvePublicPdfjsPath('/pdfjs/standard_fonts/');
+const PDFJS_WASM_URL = resolvePublicPdfjsPath('/pdfjs/wasm/');
+const PDFJS_ICC_URL = resolvePublicPdfjsPath('/pdfjs/iccs/');
 
 export const ACCEPTED_DOCUMENT_TYPES =
   '.pdf,.doc,.docx,.xlsx,.xls,.xlsm,.ods,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,text/csv';
@@ -324,6 +333,8 @@ export async function convertPdfDocument(
       cMapUrl: PDFJS_CMAP_URL,
       cMapPacked: true,
       standardFontDataUrl: PDFJS_STANDARD_FONT_URL,
+      wasmUrl: PDFJS_WASM_URL,
+      iccUrl: PDFJS_ICC_URL,
     });
     doc = await loadingTask.promise;
 
@@ -356,6 +367,7 @@ export async function convertPdfDocument(
             canvas,
             viewport,
             background: '#ffffff',
+            annotationMode: pdfjsLib.AnnotationMode.ENABLE,
           }).promise;
 
           applyColorFilter(canvas, settings.colorMode);
@@ -419,6 +431,7 @@ export async function convertPdfDocument(
           canvas,
           viewport,
           background: '#ffffff',
+          annotationMode: pdfjsLib.AnnotationMode.ENABLE,
         }).promise;
 
         applyColorFilter(canvas, settings.colorMode);
